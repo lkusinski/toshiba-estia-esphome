@@ -129,3 +129,42 @@ Odpowiedź hydroboxu (`0x1A`):
 0A:60:70:E0:00:62:1C
 0A:60:FF:E0:88:62:33
 ```
+
+### 6.4 Automatyczne Skanowanie Kodów DN (`scan_dn_codes`)
+Wykorzystując tryb rozkazu `0xF1` (zapytanie o kolejny kod DN) lub sekwencyjne odpytywanie adresów, usługa ESPHome może w sposób automatyczny wykryć kody DN aktywne w danej wersji oprogramowania hydroboxu:
+* **Ramka zapytania:** `0D:61:70:E0:41:1A:F1:<DN>:00:<CHK>`
+* **Odstęp czasowy:** Wymagany minimalny odstęp $\ge 400\,\text{ms}$ między kolejnymi zapytaniami, zapobiegający przeciążeniu kolejki magistrali AB.
+* **Odpowiedź hydroboxu:** Jeśli parametr istnieje w EEPROM, jednostka odpowiada ramką `0C:70:60:E0:80:1A:<DN>:<VAL>:<CHK>`. Dla kodów nieobsługiwanych zwraca `0x80:A2` lub brak odpowiedzi.
+
+---
+
+## 7. Diagnostyka Błędów i Alarmów
+
+### 7.1 Flaga Awarii w Ramce Statusu (`0x15:31`)
+Płyta główna hydroboxu cyklicznie rozsyła ramki stanu (`0x15:31`):
+* **Bajt 6 = `0x00`:** Stan normalny (brak aktywnych usterek).
+* **Bajt 6 = `0x49`:** Zarejestrowana aktywna usterka / błąd. Na pilocie pojawia się ikona klucza serwisowego.
+
+### 7.2 Odpytanie Historii Błędów (`0x27`)
+Zapisane w pamięci nieulotnej usterki można odczytać sekwencyjnie dedykowaną ramką:
+* **Ramka zapytania:**
+  ```text
+  0B:61:70:E0:41:27:<RECORD_ID>:00:<CHK>
+  ```
+  Gdzie `<RECORD_ID>` określa numer wpisu (`0x01` = bieżący / najświeższy błąd, `0x02`..`0x04` = błędy historyczne).
+* **Odpowiedź hydroboxu (`0x80:27`):**
+  ```text
+  0C:70:60:E0:80:27:<RECORD_ID>:<FLAGS>:<ERROR_BYTE>:<CHK>
+  ```
+
+### 7.3 Tabela Dekodowania Serii Kodów Błędów
+Bajt błędu jest kodowany dwuniblowo – starszy półbajt wskazuje serię (literę), a młodszy numer błędu:
+
+| Starszy Półbajt | Seria | Podsystem / Układ | Przykładowe Błędy |
+|---|---|---|---|
+| `0x1` | **A** | Hydrobox / Jednostka wewnętrzna | `A01` (Czujnik przepływu), `A02` (Przegrzanie) |
+| `0x4` | **E** | Komunikacja magistrali AB / Inwertera | `E01` (Brak pilota), `E04` (Błąd inwertera), `E08` (Kolizja adresów) |
+| `0x6` | **F** | Czujniki / Termistory | `F01` (Czujnik wody), `F04` (Czujnik temp. tłoczenia TD) |
+| `0x8` | **H** | Sprężarka i stopień mocy (IPM) | `H01` (Przeciążenie prądowe), `H02` (Błąd modułu IPM), `H06` (Zadziałanie niskiego ciśnienia) |
+| `0xC` | **L** | Niezgodność konfiguracji / EEPROM | `L03` (Duplikacja jednostki), `L29` (Błędna liczba jednostek) |
+| `0xE` | **P** | Zabezpieczenia ciśnieniowe i termiczne | `P01` (Presostat wysokiego ciśnienia), `P04` (Przegrzanie tłoczenia), `P10` (Ochrona przed zamarzaniem) |

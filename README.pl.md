@@ -110,6 +110,6 @@ Projekt zawiera:
 ---
 
 ## 📜 Uznanie autorstwa (Credits)
-* Bazuje na pracach inżynierii wstecznej prowadzonych przez [makusets/esphome-toshiba-ab](https://github.com/makusets/esphome-toshiba-ab) oraz społeczność badaczy protokołów Toshiba/Carrier.  
+* Bazuje na pracach inżynierii wstecznej prowadzonych przez [makusets/esphome-toshiba-ab](https://github.com/makusets/esphome-toshiba-ab), pionierskich badaniach warstwy fizycznej transceivera przez [issalig/toshiba_air_cond](https://github.com/issalig/toshiba_air_cond) oraz implementacji TCC-Link w ESPHome autorstwa [muxa/esphome-tcc-link](https://github.com/muxa/esphome-tcc-link).
 * Przetestowany, dostosowany i udokumentowany na domowej instalacji pompy ciepła Toshiba Estia 5 Hipower.  
 * Oficjalny fork komponentu z poprawkami: [lkusinski/esphome-toshiba-ab](https://github.com/lkusinski/esphome-toshiba-ab).

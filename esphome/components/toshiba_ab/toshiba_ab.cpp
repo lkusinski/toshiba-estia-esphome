@@ -4165,6 +4165,12 @@ void ToshibaAbClimate::process_received_data_estia_first_gen_(const DataFrame *f
     if (is_master_source && frame->raw[4] == 0x80 && frame->raw[5] == 0x5C) {
       return "Master reporting data/sensor value";
     }
+    if (is_master_source && frame->raw[4] == 0x80 && frame->raw[5] == 0x1A) {
+      return "Master reporting DN code";
+    }
+    if (is_master_source && frame->raw[4] == 0x80 && frame->raw[5] == 0x27) {
+      return "Master reporting error history";
+    }
     if (is_master_source && frame->raw[4] == 0x80 && frame->raw[5] == 0xA2) {
       return "Master reporting data/sensor not available";
     }
@@ -4322,6 +4328,30 @@ void ToshibaAbClimate::process_received_data_estia_first_gen_(const DataFrame *f
       this->last_sensor_query_id_ = 0xFF;
     }
     if (!published_polled_sensor && this->outdoor_temp_sensor_) this->outdoor_temp_sensor_->publish_state(value);
+  } else if (src == this->master_address_ && frame->raw[4] == 0x80 && frame->raw[5] == 0x1A && len >= 8) {
+    const uint8_t dn_code = frame->raw[6];
+    const uint8_t dn_val = frame->raw[7];
+    ESP_LOGI(TAG, "Estia DN Code Response: DN 0x%02X (%u) = 0x%02X (%u)", dn_code, dn_code, dn_val, dn_val);
+  } else if (src == this->master_address_ && frame->raw[4] == 0x80 && frame->raw[5] == 0x27 && len >= 8) {
+    const uint8_t err_record = frame->raw[6];
+    const uint8_t err_byte = (len > 9) ? frame->raw[8] : frame->raw[7];
+    if (err_byte == 0x00) {
+      ESP_LOGI(TAG, "Estia Error History Record #%u: None (0x00)", err_record);
+    } else {
+      char prefix = '?';
+      const uint8_t high = (err_byte >> 4) & 0x0F;
+      const uint8_t low = err_byte & 0x0F;
+      switch (high) {
+        case 0x1: prefix = 'A'; break; // Hydro unit / indoor board
+        case 0x4: prefix = 'E'; break; // Communication / Bus
+        case 0x6: prefix = 'F'; break; // Sensor / Thermistor
+        case 0x8: prefix = 'H'; break; // Compressor / Inverter
+        case 0xC: prefix = 'L'; break; // System / EEPROM / Interlock
+        case 0xE: prefix = 'P'; break; // Protection / Pressure / Temperature
+        default:  prefix = 'U'; break;
+      }
+      ESP_LOGW(TAG, "Estia Error History Record #%u: %c%02X (raw byte: 0x%02X)", err_record, prefix, low, err_byte);
+    }
   } else if (src == this->master_address_ && frame->raw[4] == 0x80 && frame->raw[5] == 0xA2) {
     if (this->sensor_query_outstanding_ || this->last_sensor_query_id_ != 0xFF) {
       ESP_LOGD(TAG, "Estia first-gen sensor not available: id=0x%02X", this->last_sensor_query_id_);

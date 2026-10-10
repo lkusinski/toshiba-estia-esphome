@@ -130,6 +130,6 @@ Projekt stanowi kompletny i przetestowany na żywym sprzęcie system integracji 
 ---
 
 ## 📜 Credits & Acknowledgments
-* Built upon the foundational work by [makusets/esphome-toshiba-ab](https://github.com/makusets/esphome-toshiba-ab) and the Toshiba/Carrier reverse-engineering community.
+* Built upon foundational work by [makusets/esphome-toshiba-ab](https://github.com/makusets/esphome-toshiba-ab), the pioneering physical transceiver research by [issalig/toshiba_air_cond](https://github.com/issalig/toshiba_air_cond), and the TCC-Link ESPHome implementation by [muxa/esphome-tcc-link](https://github.com/muxa/esphome-tcc-link).
 * Tested, adapted, and documented on a residential Toshiba Estia Series 5 Hipower installation.
 * Upstream fork with verified patches: [lkusinski/esphome-toshiba-ab](https://github.com/lkusinski/esphome-toshiba-ab).

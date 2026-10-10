@@ -129,3 +129,42 @@ Master RX: 0A:70:60:E0:80:A1:DB (ACK)
 0A:60:70:E0:00:62:1C
 0A:60:FF:E0:88:62:33
 ```
+
+### 6.4 Automated DN Code Scanning (`scan_dn_codes`)
+Using command mode `0xF1` ("Next" DN code query) or sequential addressing, an automation or service can enumerate active DN codes supported by the specific hydrobox firmware:
+* **Query Frame:** `0D:61:70:E0:41:1A:F1:<DN>:00:<CHK>`
+* **Pacing & Timing:** A delay of $\ge 400\,\text{ms}$ between consecutive queries is required to respect bus arbitration and prevent receive queue saturation.
+* **Hydrobox Response:** If the DN parameter exists, the unit responds with `0C:70:60:E0:80:1A:<DN>:<VAL>:<CHK>`. Unsupported codes return `0x80:A2` or no response.
+
+---
+
+## 7. Error & Fault Diagnostics Protocol
+
+### 7.1 Real-Time Status Error Flag (`0x15:31`)
+The master hydrobox broadcasts periodic state updates (`0x15:31`):
+* **Byte 6 = `0x00`:** Normal operating condition (all systems operational).
+* **Byte 6 = `0x49`:** Active fault condition latched. Remote controller displays check wrench icon.
+
+### 7.2 Error History Query (`0x27`)
+Diagnostic records can be read sequentially from the internal non-volatile error log:
+* **Remote Query Frame:**
+  ```text
+  0B:61:70:E0:41:27:<RECORD_ID>:00:<CHK>
+  ```
+  Where `<RECORD_ID>` specifies the error slot (`0x01` = latest/current error, `0x02`..`0x04` = previous historical errors).
+* **Master Error Response (`0x80:27`):**
+  ```text
+  0C:70:60:E0:80:27:<RECORD_ID>:<FLAGS>:<ERROR_BYTE>:<CHK>
+  ```
+
+### 7.3 Fault Code Series Decoding
+The error byte maps directly into standard Toshiba diagnostic codes based on its high nibble:
+
+| High Nibble | Series | Subsystem / Function | Typical Faults |
+|---|---|---|---|
+| `0x1` | **A** | Hydrobox / Internal Unit | `A01` (Flow switch), `A02` (Overheating) |
+| `0x4` | **E** | Communication / AB Bus | `E01` (Remote comms), `E04` (Inverter comms), `E08` (Address collision) |
+| `0x6` | **F** | Sensors / Thermistors | `F01` (Water temp sensor), `F04` (Discharge TD sensor error) |
+| `0x8` | **H** | Compressor & Inverter Driver | `H01` (Inverter overcurrent), `H02` (IPM trip), `H06` (Low pressure trip) |
+| `0xC` | **L** | System & Interlocks | `L03` (Duplicated master), `L29` (Outdoor unit quantity) |
+| `0xE` | **P** | Protection Devices | `P01` (High pressure trip), `P04` (Discharge overheat), `P10` (Freeze protection) |
