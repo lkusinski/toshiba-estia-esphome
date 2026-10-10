@@ -1,0 +1,1110 @@
+###############################################################################
+# Toshiba Estia 5 Hipower R410A — HWS-P805XWHT6-E (hydrobox) / HWS-P805HR-E
+# System / Układ: Radiators + 2x RTL floor loops / Grzejniki + 2x RTL (C.O. only, no DHW / bez CWU)
+# Transceiver: makusets v3.2 (ESP-12F / ESP8266), powered directly from AB line / zasilanie z AB
+# UART: 2400 baud, 8N1 (TX GPIO12, RX GPIO13)
+#
+# Features / Kluczowe funkcje:
+# - Native C++ climate entity for Zone 1 / Natywny termostat C++ dla Strefy 1
+# - Corrected flow water temp decoding (byte 13) / Poprawne dekodowanie temp. wody (bajt 13)
+# - Installer DN codes read/write services (0x1C / 0x1A) / Obsługa kodów instalatora DN
+# - Silent mode switch (0x24:04) / Przełącznik trybu cichego agregatu
+# - Onboard status LED on GPIO2 / Dioda statusowa na GPIO2
+# - Optimized Wi-Fi TX power (14 dBm) for OTA on bus power / Optymalizacja mocy Wi-Fi
+# - Full refrigeration telemetry (PD, Ps, TD, TS, TE, THS, PMV, Fan) / Pełna telemetria
+###############################################################################
+
+substitutions:
+  device_name: toshiba-estia-r410a
+  friendly_name: "Toshiba Estia R410A"
+  # Nominalny punkt pracy pompy Grundfos UPM2 K 25-50/70 przy w pełni otwartych grzejnikach:
+  pump_flow_lh: "1350.0"
+  power_cos_phi: "0.90"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+esp8266:
+  board: esp12e
+
+logger:
+  baud_rate: 0
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_key
+  services:
+    - service: send_raw_frame
+      variables:
+        frame: string
+      then:
+        - toshiba_ab.send_raw_frame:
+            id: toshiba_estia
+            frame: !lambda "return frame;"
+    - service: write_dn_code
+      variables:
+        code: int
+        value: int
+      then:
+        - toshiba_ab.send_raw_frame:
+            id: toshiba_estia
+            frame: !lambda |-
+              uint8_t dn = (uint8_t)code;
+              uint8_t val = (uint8_t)value;
+              uint8_t b[] = {0x0C, 0x61, 0x70, 0xE0, 0x01, 0x1C, dn, val};
+              uint8_t chk = 0; for (auto v : b) chk += v;
+              char f[80];
+              snprintf(f, sizeof(f), "F0:F0:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:A0",
+                b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], chk);
+              ESP_LOGI("estia_dn", "DN Write: DN 0x%02X = 0x%02X, frame: %s", dn, val, f);
+              return std::string(f);
+    - service: query_dn_code
+      variables:
+        code: int
+      then:
+        - toshiba_ab.send_raw_frame:
+            id: toshiba_estia
+            frame: !lambda |-
+              uint8_t dn = (uint8_t)code;
+              uint8_t b[] = {0x0D, 0x61, 0x70, 0xE0, 0x41, 0x1A, 0xF1, dn, 0x00};
+              uint8_t chk = 0; for (auto v : b) chk += v;
+              char f[80];
+              snprintf(f, sizeof(f), "F0:F0:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:A0",
+                b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], chk);
+              ESP_LOGI("estia_dn", "DN Query: DN 0x%02X, frame: %s", dn, f);
+              return std::string(f);
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "Europe/Warsaw"
+
+ota:
+  - platform: esphome
+    password: !secret esphome_ota_password
+
+status_led:
+  pin:
+    number: GPIO2
+    inverted: true
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  fast_connect: true
+  power_save_mode: none
+  output_power: 14.0dBm
+  ap:
+    ssid: "${friendly_name} Fallback"
+    password: !secret esphome_ap_password
+
+web_server:
+  port: 80
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [toshiba_ab]
+
+uart:
+  tx_pin: GPIO12
+  rx_pin: GPIO13
+  baud_rate: 2400
+  parity: NONE
+  rx_buffer_size: 2048
+
+climate:
+  - platform: toshiba_ab
+    # Pompa pracuje wyłącznie na C.O. (brak zasobnika CWU)
+    id: toshiba_estia
+    name: "Estia: sterownik bazowy"
+    internal: true               # Ukryte w HA, aby nie tworzyć fałszywego termostatu CWU
+
+    frame_format: estia
+    master: 0x70
+    remote: 0x61
+    autoreset_errors: false
+
+    # Tryb tylko odczyt — sprzętowy hebel bezpieczeństwa
+    read_only_switch:
+      name: "Estia: tryb tylko odczyt"
+      id: estia_read_only
+      restore_mode: RESTORE_DEFAULT_ON
+
+    # --- Diagnostyka magistrali ---
+    connected:
+      name: "Estia: magistrala OK"
+      id: estia_connected
+    failed_crcs:
+      name: "Estia: błędy CRC"
+    remote_error:
+      name: "Estia: błąd zdalnego sterownika"
+
+    # --- Sterowanie obiegiem grzewczym C.O. ---
+    zone1_switch:
+      name: "Estia: strefa 1"
+      id: estia_zone1_switch
+
+    # --- Główny termostat C.O. (Autonomia mikrokontrolera) ---
+    zone1_climate:
+      name: "Estia: ogrzewanie strefy 1"
+      id: estia_zone1_climate
+
+    # --- Temperatury dekodowane z ramek statusu ---
+    zone1_water_temperature:
+      name: "Estia: temp. wody strefy 1"
+    zone1_target_temperature:
+      name: "Estia: zadana strefy — odczyt"
+
+    ############################################################################
+    # TELEMETRIA ZAPYTYWANA PO MAGISTRALI AB (first-gen)
+    ############################################################################
+    sensors:
+      # --- Parametry pracy agregatu (co 30 s) ---
+      - address: 0x61            # TO — temp. zewnętrzna [°C]
+        scale: 1.0
+        interval: 30s
+        sensor:
+          name: "Estia: temp. zewnętrzna"
+          id: estia_to
+          unit_of_measurement: "°C"
+          accuracy_decimals: 1
+          device_class: temperature
+          state_class: measurement
+
+      - address: 0x6A            # Prąd jednostki zewnętrznej [A]
+        scale: 0.1
+        interval: 30s
+        sensor:
+          name: "Estia: prąd"
+          id: estia_current
+          unit_of_measurement: "A"
+          accuracy_decimals: 2
+          device_class: current
+          state_class: measurement
+
+      - address: 0x70            # Obroty sprężarki [Hz]
+        scale: 1.0
+        interval: 30s
+        sensor:
+          name: "Estia: sprężarka Hz"
+          id: estia_hz
+          unit_of_measurement: "Hz"
+          accuracy_decimals: 0
+          state_class: measurement
+
+      - address: 0x7A            # PD — ciśnienie wysokie [kPa]
+        scale: 10.0
+        interval: 30s
+        sensor:
+          name: "Estia: ciśnienie wysokie"
+          id: estia_pd
+          unit_of_measurement: "kPa"
+          accuracy_decimals: 0
+          state_class: measurement
+
+      - address: 0x0E            # Ps — ciśnienie niskie [kPa]
+        scale: 10.0
+        interval: 30s
+        sensor:
+          name: "Estia: ciśnienie niskie"
+          id: estia_ps
+          unit_of_measurement: "kPa"
+          accuracy_decimals: 0
+          state_class: measurement
+
+      - address: 0x62            # TD — temp. zrzutu gorącego gazu [°C]
+        scale: 1.0
+        interval: 30s
+        sensor:
+          name: "Estia: temp. zrzutu"
+          id: estia_td
+          unit_of_measurement: "°C"
+          accuracy_decimals: 1
+          device_class: temperature
+          state_class: measurement
+
+      # --- Obieg chłodniczy (co 60 s) ---
+      - address: 0x63            # TS — temp. ssania [°C]
+        scale: 1.0
+        interval: 60s
+        sensor:
+          name: "Estia: temp. ssania"
+          id: estia_ts
+          unit_of_measurement: "°C"
+          accuracy_decimals: 1
+          device_class: temperature
+          state_class: measurement
+
+      - address: 0x60            # TE — temp. wymiennika [°C]
+        scale: 1.0
+        interval: 60s
+        sensor:
+          name: "Estia: temp. wymiennika"
+          id: estia_te
+          unit_of_measurement: "°C"
+          accuracy_decimals: 1
+          device_class: temperature
+          state_class: measurement
+
+      - address: 0x65            # THS — temp. radiatora inwertera [°C]
+        scale: 1.0
+        interval: 60s
+        sensor:
+          name: "Estia: temp. THS"
+          id: estia_ths
+          unit_of_measurement: "°C"
+          accuracy_decimals: 1
+          device_class: temperature
+          state_class: measurement
+
+      - address: 0x6D            # TL — temp. cieczy [°C]
+        scale: 1.0
+        interval: 60s
+        sensor:
+          name: "Estia: temp. cieczy"
+          id: estia_tl
+          unit_of_measurement: "°C"
+          accuracy_decimals: 1
+          device_class: temperature
+          state_class: measurement
+
+      - address: 0x72            # Wentylator jednostki zewnętrznej [rpm]
+        scale: 1.0
+        interval: 60s
+        sensor:
+          name: "Estia: wentylator"
+          id: estia_fan
+          unit_of_measurement: "rpm"
+          accuracy_decimals: 0
+          state_class: measurement
+
+      - address: 0x74            # Pozycja elektronicznego zaworu rozprężnego PMV
+        scale: 0.1
+        interval: 60s
+        sensor:
+          name: "Estia: PMV"
+          id: estia_pmv
+          unit_of_measurement: "puls"
+          accuracy_decimals: 1
+          state_class: measurement
+
+      # --- Obieg hydrauliczny C.O. (co 60 s) ---
+      - address: 0x06            # TWI — woda powrót [°C]
+        scale: 1.0
+        interval: 60s
+        sensor:
+          name: "Estia: woda powrót (TWI)"
+          id: estia_twi
+          unit_of_measurement: "°C"
+          accuracy_decimals: 1
+          device_class: temperature
+          state_class: measurement
+
+      - address: 0x07            # TWO — woda zasilanie [°C]
+        scale: 1.0
+        interval: 60s
+        sensor:
+          name: "Estia: woda zasilanie (TWO)"
+          id: estia_two
+          unit_of_measurement: "°C"
+          accuracy_decimals: 1
+          device_class: temperature
+          state_class: measurement
+
+      - address: 0x04            # TC — temperatura skroplin [°C]
+        scale: 1.0
+        interval: 60s
+        sensor:
+          name: "Estia: temp. skroplin (TC)"
+          id: estia_tc
+          unit_of_measurement: "°C"
+          accuracy_decimals: 1
+          device_class: temperature
+          state_class: measurement
+
+      # --- Liczniki czasu pracy (co 300 s) ---
+      - address: 0xF0            # Czas pracy mikrokomputera [h]
+        scale: 0.01
+        interval: 300s
+        sensor:
+          name: "Estia: czas pracy sterownika [h]"
+          id: estia_h_f0
+          unit_of_measurement: "h"
+          accuracy_decimals: 2
+          state_class: total_increasing
+
+      - address: 0xF3            # Czas pracy sprężarki w grzaniu [h]
+        scale: 0.01
+        interval: 300s
+        sensor:
+          name: "Estia: sprężarka grzanie [h]"
+          id: estia_h_f3
+          unit_of_measurement: "h"
+          accuracy_decimals: 2
+          state_class: total_increasing
+
+      - address: 0xF4            # Czas pracy pompy obiegowej Grundfos [h]
+        scale: 0.01
+        interval: 300s
+        sensor:
+          name: "Estia: pompa obiegowa [h]"
+          id: estia_h_f4
+          unit_of_measurement: "h"
+          accuracy_decimals: 2
+          state_class: total_increasing
+
+      - address: 0xF6            # Czas pracy grzałki elektrycznej [h]
+        scale: 0.01
+        interval: 300s
+        sensor:
+          name: "Estia: grzałka elektryczna [h]"
+          id: estia_h_f6
+          unit_of_measurement: "h"
+          accuracy_decimals: 2
+          state_class: total_increasing
+
+      # --- Rozszerzona diagnostyka magistrali (domyślnie ukryta) ---
+      - address: 0x08            # THO — czujnik temp. zewnętrznej hydroboxu [°C]
+        scale: 1.0
+        interval: 120s
+        sensor:
+          name: "Estia: temp. zewnętrzna hydroboxu (THO)"
+          id: estia_tho
+          unit_of_measurement: "°C"
+          accuracy_decimals: 1
+          device_class: temperature
+          state_class: measurement
+          disabled_by_default: true
+          entity_category: diagnostic
+
+      - address: 0x0B            # Pozycja zaworu mieszającego [%]
+        scale: 1.0
+        interval: 120s
+        sensor:
+          name: "Estia: zawór mieszający"
+          id: estia_valve_pos
+          unit_of_measurement: "%"
+          accuracy_decimals: 0
+          state_class: measurement
+          disabled_by_default: true
+          entity_category: diagnostic
+
+      - address: 0xF2            # Czas pracy sprężarki (chłodzenie/ogółem) [h]
+        scale: 0.01
+        interval: 300s
+        sensor:
+          name: "Estia: sprężarka chłodzenie [h]"
+          id: estia_h_f2
+          unit_of_measurement: "h"
+          accuracy_decimals: 2
+          state_class: total_increasing
+          disabled_by_default: true
+          entity_category: diagnostic
+
+      - address: 0xF7            # Licznik pomocniczy [h]
+        scale: 0.01
+        interval: 300s
+        sensor:
+          name: "Estia: licznik pomocniczy [h]"
+          id: estia_h_f7
+          unit_of_measurement: "h"
+          accuracy_decimals: 2
+          state_class: total_increasing
+          disabled_by_default: true
+          entity_category: diagnostic
+
+
+number:
+  # Zapasowa surowa zadana (ukryta — sterowanie odbywa się przez termostat climate)
+  - platform: template
+    name: "Estia: zadana strefy — ustaw"
+    id: estia_zone1_setpoint
+    internal: true
+    optimistic: true
+    initial_value: 30
+    restore_value: true
+    min_value: 20
+    max_value: 60
+    step: 1
+    unit_of_measurement: "°C"
+    icon: mdi:thermostat
+    mode: box
+    set_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_on: estia_zone1_switch
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: !lambda |-
+                  uint8_t enc = (uint8_t)((x + 16.0f) * 2.0f);
+                  uint8_t b[] = {0x0F,0x61,0x70,0xE0,0x01,0x23,0x02,enc,0x66,0xA2,enc};
+                  uint8_t chk = 0; for (auto v : b) chk += v;
+                  char f[80];
+                  snprintf(f, sizeof(f),
+                    "F0:F0:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:A0",
+                    b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9],b[10],chk);
+                  ESP_LOGI("estia_ctrl", "Setpoint C.O. = %.0f C, ramka: %s", x, f);
+                  return std::string(f);
+
+  # Korekta / przesunięcie krzywej grzewczej DN 27 (-5 K do +5 K)
+  - platform: template
+    name: "Estia: przesunięcie krzywej (DN 27)"
+    id: estia_dn27_offset
+    optimistic: true
+    initial_value: 0
+    restore_value: true
+    min_value: -5
+    max_value: 5
+    step: 1
+    unit_of_measurement: "K"
+    icon: mdi:chart-bell-curve
+    mode: slider
+    set_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: !lambda |-
+                  int8_t val = (int8_t)x;
+                  uint8_t uval = (uint8_t)val;
+                  uint8_t b[] = {0x0C, 0x61, 0x70, 0xE0, 0x01, 0x1C, 0x27, uval};
+                  uint8_t chk = 0; for (auto v : b) chk += v;
+                  char f[80];
+                  snprintf(f, sizeof(f), "F0:F0:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:A0",
+                           b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], chk);
+                  ESP_LOGI("estia_dn27", "Zapis DN 27 przesunięcie = %d K, ramka: %s", val, f);
+                  return std::string(f);
+
+  # Krzywa grzewcza: woda przy wysokiej temp. zewn. Tw1 (DN 28)
+  - platform: template
+    name: "Estia: krzywa Tw1 woda ciepło (DN 28)"
+    id: estia_dn28_tw1
+    disabled_by_default: true
+    entity_category: config
+    optimistic: true
+    initial_value: 25
+    restore_value: true
+    min_value: 20
+    max_value: 35
+    step: 1
+    unit_of_measurement: "°C"
+    icon: mdi:water-thermometer
+    mode: slider
+    set_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: !lambda |-
+                  uint8_t val = (uint8_t)x;
+                  uint8_t b[] = {0x0C, 0x61, 0x70, 0xE0, 0x01, 0x1C, 0x28, val};
+                  uint8_t chk = 0; for (auto v : b) chk += v;
+                  char f[80];
+                  snprintf(f, sizeof(f), "F0:F0:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:A0",
+                           b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], chk);
+                  ESP_LOGI("estia_dn28", "Zapis DN 28 Tw1 = %u C, ramka: %s", val, f);
+                  return std::string(f);
+
+  # Krzywa grzewcza: woda przy niskiej temp. zewn. Tw2 (DN 29)
+  - platform: template
+    name: "Estia: krzywa Tw2 woda mróz (DN 29)"
+    id: estia_dn29_tw2
+    disabled_by_default: true
+    entity_category: config
+    optimistic: true
+    initial_value: 45
+    restore_value: true
+    min_value: 35
+    max_value: 55
+    step: 1
+    unit_of_measurement: "°C"
+    icon: mdi:water-thermometer
+    mode: slider
+    set_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: !lambda |-
+                  uint8_t val = (uint8_t)x;
+                  uint8_t b[] = {0x0C, 0x61, 0x70, 0xE0, 0x01, 0x1C, 0x29, val};
+                  uint8_t chk = 0; for (auto v : b) chk += v;
+                  char f[80];
+                  snprintf(f, sizeof(f), "F0:F0:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:A0",
+                           b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], chk);
+                  ESP_LOGI("estia_dn29", "Zapis DN 29 Tw2 = %u C, ramka: %s", val, f);
+                  return std::string(f);
+
+  # Krzywa grzewcza: wysoka temp. zewn. Te1 (DN 30)
+  - platform: template
+    name: "Estia: krzywa Te1 zewn ciepło (DN 30)"
+    id: estia_dn30_te1
+    disabled_by_default: true
+    entity_category: config
+    optimistic: true
+    initial_value: 18
+    restore_value: true
+    min_value: 10
+    max_value: 25
+    step: 1
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-high
+    mode: slider
+    set_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: !lambda |-
+                  uint8_t val = (uint8_t)x;
+                  uint8_t b[] = {0x0C, 0x61, 0x70, 0xE0, 0x01, 0x1C, 0x30, val};
+                  uint8_t chk = 0; for (auto v : b) chk += v;
+                  char f[80];
+                  snprintf(f, sizeof(f), "F0:F0:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:A0",
+                           b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], chk);
+                  ESP_LOGI("estia_dn30", "Zapis DN 30 Te1 = %u C, ramka: %s", val, f);
+                  return std::string(f);
+
+  # Krzywa grzewcza: niska temp. zewn. Te2 (DN 31)
+  - platform: template
+    name: "Estia: krzywa Te2 zewn mróz (DN 31)"
+    id: estia_dn31_te2
+    disabled_by_default: true
+    entity_category: config
+    optimistic: true
+    initial_value: -10
+    restore_value: true
+    min_value: -20
+    max_value: 0
+    step: 1
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-low
+    mode: slider
+    set_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: !lambda |-
+                  int8_t val = (int8_t)x;
+                  uint8_t uval = (uint8_t)val;
+                  uint8_t b[] = {0x0C, 0x61, 0x70, 0xE0, 0x01, 0x1C, 0x31, uval};
+                  uint8_t chk = 0; for (auto v : b) chk += v;
+                  char f[80];
+                  snprintf(f, sizeof(f), "F0:F0:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:A0",
+                           b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], chk);
+                  ESP_LOGI("estia_dn31", "Zapis DN 31 Te2 = %d C, ramka: %s", val, f);
+                  return std::string(f);
+
+  # Histereza załączenia termostatu C.O. (DN 25)
+  - platform: template
+    name: "Estia: histereza załączenia C.O. (DN 25)"
+    id: estia_dn25_hyst_on
+    disabled_by_default: true
+    entity_category: config
+    optimistic: true
+    initial_value: 3
+    restore_value: true
+    min_value: 1
+    max_value: 10
+    step: 1
+    unit_of_measurement: "K"
+    icon: mdi:thermometer-minus
+    mode: slider
+    set_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: !lambda |-
+                  uint8_t val = (uint8_t)x;
+                  uint8_t b[] = {0x0C, 0x61, 0x70, 0xE0, 0x01, 0x1C, 0x25, val};
+                  uint8_t chk = 0; for (auto v : b) chk += v;
+                  char f[80];
+                  snprintf(f, sizeof(f), "F0:F0:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:A0",
+                           b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], chk);
+                  ESP_LOGI("estia_dn25", "Zapis DN 25 Histereza ON = %u K, ramka: %s", val, f);
+                  return std::string(f);
+
+  # Histereza wyłączenia termostatu C.O. (DN 26)
+  - platform: template
+    name: "Estia: histereza wyłączenia C.O. (DN 26)"
+    id: estia_dn26_hyst_off
+    disabled_by_default: true
+    entity_category: config
+    optimistic: true
+    initial_value: 5
+    restore_value: true
+    min_value: 1
+    max_value: 10
+    step: 1
+    unit_of_measurement: "K"
+    icon: mdi:thermometer-plus
+    mode: slider
+    set_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: !lambda |-
+                  uint8_t val = (uint8_t)x;
+                  uint8_t b[] = {0x0C, 0x61, 0x70, 0xE0, 0x01, 0x1C, 0x26, val};
+                  uint8_t chk = 0; for (auto v : b) chk += v;
+                  char f[80];
+                  snprintf(f, sizeof(f), "F0:F0:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:A0",
+                           b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], chk);
+                  ESP_LOGI("estia_dn26", "Zapis DN 26 Histereza OFF = %u K, ramka: %s", val, f);
+                  return std::string(f);
+
+  # Prędkość / bieg nominalny pompy obiegowej Grundfos UPM2 (DN 36)
+  - platform: template
+    name: "Estia: bieg pompy obiegowej (DN 36)"
+    id: estia_dn36_pump_speed
+    disabled_by_default: true
+    entity_category: config
+    optimistic: true
+    initial_value: 6
+    restore_value: true
+    min_value: 1
+    max_value: 7
+    step: 1
+    icon: mdi:pump
+    mode: slider
+    set_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: !lambda |-
+                  uint8_t val = (uint8_t)x;
+                  uint8_t b[] = {0x0C, 0x61, 0x70, 0xE0, 0x01, 0x1C, 0x36, val};
+                  uint8_t chk = 0; for (auto v : b) chk += v;
+                  char f[80];
+                  snprintf(f, sizeof(f), "F0:F0:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:A0",
+                           b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], chk);
+                  ESP_LOGI("estia_dn36", "Zapis DN 36 Bieg pompy = %u, ramka: %s", val, f);
+                  return std::string(f);
+
+  # Czas wybiegu pompy obiegowej po stopie sprężarki (DN 39)
+  - platform: template
+    name: "Estia: czas wybiegu pompy C.O. (DN 39)"
+    id: estia_dn39_pump_post_run
+    disabled_by_default: true
+    entity_category: config
+    optimistic: true
+    initial_value: 8
+    restore_value: true
+    min_value: 1
+    max_value: 30
+    step: 1
+    unit_of_measurement: "min"
+    icon: mdi:timer-sand
+    mode: slider
+    set_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: !lambda |-
+                  uint8_t val = (uint8_t)x;
+                  uint8_t b[] = {0x0C, 0x61, 0x70, 0xE0, 0x01, 0x1C, 0x39, val};
+                  uint8_t chk = 0; for (auto v : b) chk += v;
+                  char f[80];
+                  snprintf(f, sizeof(f), "F0:F0:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:A0",
+                           b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], chk);
+                  ESP_LOGI("estia_dn39", "Zapis DN 39 Wybieg pompy = %u min, ramka: %s", val, f);
+                  return std::string(f);
+
+  # Maksymalny limit prądu agregatu (DN 68)
+  - platform: template
+    name: "Estia: limit prądu agregatu (DN 68)"
+    id: estia_dn68_current_limit
+    disabled_by_default: true
+    entity_category: config
+    optimistic: true
+    initial_value: 15
+    restore_value: true
+    min_value: 5
+    max_value: 20
+    step: 1
+    unit_of_measurement: "A"
+    icon: mdi:current-ac
+    mode: slider
+    set_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: !lambda |-
+                  uint8_t val = (uint8_t)x;
+                  uint8_t b[] = {0x0C, 0x61, 0x70, 0xE0, 0x01, 0x1C, 0x68, val};
+                  uint8_t chk = 0; for (auto v : b) chk += v;
+                  char f[80];
+                  snprintf(f, sizeof(f), "F0:F0:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:A0",
+                           b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], chk);
+                  ESP_LOGI("estia_dn68", "Zapis DN 68 Limit prądu = %u A, ramka: %s", val, f);
+                  return std::string(f);
+
+  # Czas zwłoki załączenia grzałki szczytowej (DN 09)
+  - platform: template
+    name: "Estia: zwłoka grzałki szczytowej (DN 09)"
+    id: estia_dn09_heater_delay
+    disabled_by_default: true
+    entity_category: config
+    optimistic: true
+    initial_value: 75
+    restore_value: true
+    min_value: 10
+    max_value: 120
+    step: 5
+    unit_of_measurement: "min"
+    icon: mdi:clock-alert-outline
+    mode: slider
+    set_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: !lambda |-
+                  uint8_t val = (uint8_t)x;
+                  uint8_t b[] = {0x0C, 0x61, 0x70, 0xE0, 0x01, 0x1C, 0x09, val};
+                  uint8_t chk = 0; for (auto v : b) chk += v;
+                  char f[80];
+                  snprintf(f, sizeof(f), "F0:F0:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X:A0",
+                           b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], chk);
+                  ESP_LOGI("estia_dn09", "Zapis DN 09 Zwłoka grzałki = %u min, ramka: %s", val, f);
+                  return std::string(f);
+
+
+switch:
+  # AUTO = krzywa pogodowa pompy (ukryta — zarządzana bezpośrednio z climate.mode auto)
+  - platform: template
+    name: "Estia: AUTO (krzywa pogodowa)"
+    id: estia_auto
+    internal: true
+    optimistic: true
+    icon: mdi:chart-bell-curve-cumulative
+    turn_on_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: "F0:F0:0C:61:70:E0:01:24:01:01:E4:A0"
+    turn_off_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: "F0:F0:0C:61:70:E0:01:24:01:00:E3:A0"
+
+  # Tryb cichy jednostki zewnętrznej (Silent Mode 24:04)
+  - platform: template
+    name: "Estia: tryb cichy agregatu"
+    id: estia_silent_mode
+    optimistic: true
+    icon: mdi:volume-mute
+    turn_on_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: "F0:F0:0C:61:70:E0:01:24:04:04:EA:A0"
+    turn_off_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: "F0:F0:0C:61:70:E0:01:24:04:00:E6:A0"
+
+  # Ochrona przed zamarzaniem (Frost Protection 24:02)
+  - platform: template
+    name: "Estia: ochrona przed zamarzaniem"
+    id: estia_frost_protection
+    disabled_by_default: true
+    entity_category: config
+    optimistic: true
+    icon: mdi:snowflake-alert
+    turn_on_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: "F0:F0:0C:61:70:E0:01:24:02:02:E6:A0"
+    turn_off_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: estia_connected
+              - switch.is_off: estia_read_only
+          then:
+            - toshiba_ab.send_raw_frame:
+                id: toshiba_estia
+                frame: "F0:F0:0C:61:70:E0:01:24:02:00:E4:A0"
+
+binary_sensor:
+  - platform: template
+    name: "Estia: odszranianie (defrost)"
+    id: estia_defrost
+    device_class: heat
+    icon: mdi:snowflake-melt
+    lambda: |-
+      if (id(estia_hz).state > 15.0f && (id(estia_two).state - id(estia_twi).state) < -0.3f) {
+        return true;
+      }
+      return false;
+
+  # Wczesne ostrzeżenia hydrauliczne i chłodnicze (Early Warning System)
+  - platform: template
+    name: "Estia: alarm wysokiego ciśnienia (PD)"
+    id: estia_alarm_pd
+    disabled_by_default: true
+    device_class: problem
+    entity_category: diagnostic
+    lambda: |-
+      return id(estia_pd).state > 3500.0f;
+
+  - platform: template
+    name: "Estia: alarm temp. tłoczenia (TD)"
+    id: estia_alarm_td
+    disabled_by_default: true
+    device_class: problem
+    entity_category: diagnostic
+    lambda: |-
+      return (id(estia_hz).state > 5.0f && id(estia_td).state > 90.0f);
+
+  - platform: template
+    name: "Estia: alarm temp. inwertera (THS)"
+    id: estia_alarm_ths
+    disabled_by_default: true
+    device_class: problem
+    entity_category: diagnostic
+    lambda: |-
+      return id(estia_ths).state > 80.0f;
+
+  # Stany operacyjne urządzeń wykonawczych (domyślnie ukryte)
+  - platform: template
+    name: "Estia: praca sprężarki"
+    id: estia_compressor_active
+    disabled_by_default: true
+    device_class: running
+    entity_category: diagnostic
+    icon: mdi:engine
+    lambda: |-
+      return id(estia_hz).state > 5.0f;
+
+  - platform: template
+    name: "Estia: praca pompy obiegowej"
+    id: estia_pump_active
+    disabled_by_default: true
+    device_class: running
+    entity_category: diagnostic
+    icon: mdi:pump
+    lambda: |-
+      return (id(estia_hz).state > 0.0f || fabsf(id(estia_two).state - id(estia_twi).state) > 0.3f);
+
+
+# --- Wartości pochodne liczone bezpośrednio na ESP ---
+sensor:
+  # Wskaźniki chłodnicze obiegu R410A (Inżynieria pomp ciepła)
+  - platform: template
+    name: "Estia: przegrzanie par (Superheat)"
+    id: estia_superheat
+    unit_of_measurement: "K"
+    accuracy_decimals: 1
+    disabled_by_default: true
+    entity_category: diagnostic
+    icon: mdi:thermometer-chevron-up
+    update_interval: 60s
+    lambda: |-
+      if (id(estia_hz).state < 10.0f) return NAN;
+      return id(estia_ts).state - id(estia_te).state;
+
+  - platform: template
+    name: "Estia: dochłodzenie cieczy (Subcooling)"
+    id: estia_subcooling
+    unit_of_measurement: "K"
+    accuracy_decimals: 1
+    disabled_by_default: true
+    entity_category: diagnostic
+    icon: mdi:thermometer-chevron-down
+    update_interval: 60s
+    lambda: |-
+      if (id(estia_hz).state < 10.0f) return NAN;
+      return id(estia_tc).state - id(estia_tl).state;
+  - platform: template
+    name: "Estia: delta T"
+    id: estia_dt
+    unit_of_measurement: "K"
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 15s
+    lambda: |-
+      return id(estia_two).state - id(estia_twi).state;
+
+  - platform: template
+    name: "Estia: moc elektryczna (szac.)"
+    id: estia_p_el
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+    update_interval: 15s
+    lambda: |-
+      return id(estia_current).state * 230.0f * ${power_cos_phi};
+
+  - platform: template
+    name: "Estia: moc grzewcza (szac.)"
+    id: estia_p_th
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+    update_interval: 15s
+    lambda: |-
+      float dt = id(estia_two).state - id(estia_twi).state;
+      if (dt < 0.0f) dt = 0.0f;
+      if (dt > 15.0f) dt = 15.0f;
+      return dt * ${pump_flow_lh} * 4.186f / 3.6f;
+
+  - platform: template
+    name: "Estia: COP (szac.)"
+    id: estia_cop
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: 15s
+    lambda: |-
+      float pel = id(estia_p_el).state;
+      float pth = id(estia_p_th).state;
+      if (id(estia_hz).state < 10.0f || pel < 200.0f || pth <= 0.0f) return NAN;
+      return pth / pel;
+
+  - platform: total_daily_energy
+    name: "Estia: energia elektryczna dziś"
+    id: estia_energy_el_daily
+    power_id: estia_p_el
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    device_class: energy
+    state_class: total_increasing
+
+  - platform: total_daily_energy
+    name: "Estia: ciepło wyprodukowane dziś"
+    id: estia_energy_th_daily
+    power_id: estia_p_th
+    unit_of_measurement: "kWh"
+    accuracy_decimals: 2
+    device_class: energy
+    state_class: total_increasing
+
+  - platform: template
+    name: "Estia: średni dobowy COP"
+    id: estia_cop_daily
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: 60s
+    lambda: |-
+      float eel = id(estia_energy_el_daily).state;
+      float eth = id(estia_energy_th_daily).state;
+      if (eel <= 0.1f || eth <= 0.0f) return NAN;
+      return eth / eel;
+
+button:
+  - platform: template
+    name: "Estia: Test odczyt DN 27"
+    id: estia_test_query_dn_27
+    entity_category: diagnostic
+    icon: mdi:database-search
+    on_press:
+      - toshiba_ab.send_raw_frame:
+          id: toshiba_estia
+          frame: "F0:F0:0D:61:70:E0:41:1A:F1:27:00:31:A0"
+
+  - platform: template
+    name: "Estia: Test zapis DN 27 (+1 K)"
+    id: estia_test_write_dn_27_1k
+    entity_category: config
+    icon: mdi:database-edit
+    on_press:
+      - toshiba_ab.send_raw_frame:
+          id: toshiba_estia
+          frame: "F0:F0:0C:61:70:E0:01:1C:27:01:02:A0"
+
+  - platform: template
+    name: "Estia: Test zapis DN 27 (+2 K)"
+    id: estia_test_write_dn_27_2k
+    entity_category: config
+    icon: mdi:database-edit
+    on_press:
+      - toshiba_ab.send_raw_frame:
+          id: toshiba_estia
+          frame: "F0:F0:0C:61:70:E0:01:1C:27:02:03:A0"

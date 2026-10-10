@@ -1,0 +1,389 @@
+{
+  "version": 1,
+  "minor_version": 1,
+  "key": "lovelace.pompa_ciepla",
+  "data": {
+    "config": {
+      "views": [
+        {
+          "title": "Pompa Ciepła",
+          "path": "glowny",
+          "icon": "mdi:heat-pump-outline",
+          "badges": [],
+          "cards": [
+            {
+              "type": "thermostat",
+              "entity": "climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1",
+              "name": "Toshiba Estia — Ogrzewanie C.O."
+            },
+            {
+              "type": "entities",
+              "title": "🛡️ Bezpieczeństwo i Magistrala AB",
+              "show_header_toggle": false,
+              "entities": [
+                {
+                  "entity": "input_boolean.estia_master_blokada_sterowania",
+                  "name": "🔒 Master Blokada Sterowania (Tylko odczyt)",
+                  "icon": "mdi:shield-lock"
+                },
+                {
+                  "entity": "switch.toshiba_estia_r410a_estia_tryb_tylko_odczyt",
+                  "name": "Stan sprzętowy blokady zapisu (ESP)"
+                },
+                {
+                  "entity": "binary_sensor.toshiba_estia_r410a_estia_magistrala_ok",
+                  "name": "Magistrala komunikacyjna TCC-LINK AB"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_bledy_crc",
+                  "name": "Błędy CRC magistrali"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_toshiba_noise_rate",
+                  "name": "Szum magistrali (błędy/min)"
+                }
+              ]
+            },
+            {
+              "type": "horizontal-stack",
+              "cards": [
+                {
+                  "type": "tile",
+                  "entity": "sensor.estia_status_pracy",
+                  "name": "Status pompy",
+                  "icon": "mdi:heat-pump-outline",
+                  "color": "orange"
+                },
+                {
+                  "type": "tile",
+                  "entity": "sensor.dom_srednia_temperatura_wewnetrzna",
+                  "name": "Temp. w domu",
+                  "icon": "mdi:home-thermometer",
+                  "color": "blue"
+                },
+                {
+                  "type": "tile",
+                  "entity": "sensor.toshiba_estia_r410a_estia_cop_szac",
+                  "name": "COP chwilowy",
+                  "icon": "mdi:leaf",
+                  "color": "green"
+                },
+                {
+                  "type": "tile",
+                  "entity": "sensor.toshiba_estia_r410a_estia_sredni_dobowy_cop",
+                  "name": "COP dobowy",
+                  "icon": "mdi:chart-timeline-variant-shimmer",
+                  "color": "teal"
+                },
+                {
+                  "type": "tile",
+                  "entity": "binary_sensor.toshiba_estia_r410a_estia_odszranianie_defrost",
+                  "name": "Defrost",
+                  "icon": "mdi:snowflake-melt",
+                  "color": "cyan"
+                }
+              ]
+            },
+            {
+              "type": "entities",
+              "title": "⚙️ Nastawy Krzywej, Odszranianie i Tryb Cichy",
+              "show_header_toggle": false,
+              "entities": [
+                {
+                  "entity": "switch.toshiba_estia_r410a_estia_tryb_cichy_agregatu",
+                  "name": "Tryb cichy agregatu zewnętrznego (Silent Mode)",
+                  "icon": "mdi:volume-low"
+                },
+                {
+                  "entity": "input_select.estia_tryb_sterowania",
+                  "name": "Metoda wyznaczania temperatury wody C.O."
+                },
+                {
+                  "entity": "input_number.estia_krzywa_offset",
+                  "name": "Korekta krzywej grzejników HA (Offset °C)"
+                },
+                {
+                  "entity": "number.toshiba_estia_r410a_estia_przesuniecie_krzywej_dn_27",
+                  "name": "Przesunięcie krzywej w pamięci pompy (DN 27)",
+                  "icon": "mdi:tune-vertical"
+                },
+                {
+                  "entity": "sensor.estia_zadana_wyliczona",
+                  "name": "Docelowa wyliczona temperatura zasilania"
+                },
+                {
+                  "entity": "input_boolean.estia_auto_wylaczenie_lato",
+                  "name": "Automatyczne wyłączanie w ciepłe dni (Lato)"
+                },
+                {
+                  "entity": "input_number.estia_prog_wylaczenia_lato",
+                  "name": "Próg wyłączenia C.O. (Temp. zewnętrzna)"
+                },
+                {
+                  "entity": "binary_sensor.estia_warunki_boost_pv",
+                  "name": "Boost solarny (PV Wiśniowa)"
+                },
+                {
+                  "entity": "binary_sensor.i4_tania_strefa_g12w",
+                  "name": "Tania strefa taryfowa G12w"
+                }
+              ]
+            },
+            {
+              "type": "entities",
+              "title": "🏠 Monitorowanie temperatur w domu (Midea z korektą)",
+              "show_header_toggle": false,
+              "entities": [
+                {
+                  "entity": "sensor.dom_srednia_temperatura_wewnetrzna",
+                  "name": "Średnia temperatura w domu"
+                },
+                {
+                  "entity": "sensor.dom_salon_temperatura_skorygowana",
+                  "name": "Salon parter (po korekcie)",
+                  "icon": "mdi:sofa"
+                },
+                {
+                  "entity": "input_number.midea_salon_offset",
+                  "name": "Korekta czujnika Midea Salon"
+                },
+                {
+                  "entity": "sensor.dom_biuro_temperatura_skorygowana",
+                  "name": "Biuro piętro (po korekcie)",
+                  "icon": "mdi:desk"
+                },
+                {
+                  "entity": "input_number.midea_biuro_offset",
+                  "name": "Korekta czujnika Midea Biuro"
+                }
+              ]
+            },
+            {
+              "type": "custom:mini-graph-card",
+              "name": "🌡️ Temperatury zasilania, powrotu i zadanej C.O. (8h)",
+              "icon": "mdi:thermometer-lines",
+              "entities": [
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_woda_zasilanie_two",
+                  "name": "Zasilanie (TWO)",
+                  "color": "#ff7043"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_woda_powrot_twi",
+                  "name": "Powrót (TWI)",
+                  "color": "#42a5f5"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_zadana_strefy_odczyt",
+                  "name": "Zadana",
+                  "color": "#66bb6a"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_temp_zewnetrzna",
+                  "name": "Zewnętrzna",
+                  "color": "#9e9e9e"
+                },
+                {
+                  "entity": "sensor.dom_srednia_temperatura_wewnetrzna",
+                  "name": "W domu",
+                  "color": "#e91e63",
+                  "y_axis": "secondary"
+                }
+              ],
+              "hours_to_show": 8,
+              "points_per_hour": 12,
+              "line_width": 3,
+              "height": 220,
+              "hour24": true,
+              "decimals": 1,
+              "show": {
+                "labels": true,
+                "extrema": true,
+                "legend": true,
+                "average": true,
+                "fill": "fade"
+              }
+            },
+            {
+              "type": "custom:mini-graph-card",
+              "name": "🔄 Modulacja sprężarki (Hz) i pobór prądu (8h)",
+              "icon": "mdi:engine",
+              "entities": [
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_sprezarka_hz",
+                  "name": "Sprężarka Hz",
+                  "color": "#26a69a"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_prad",
+                  "name": "Prąd A",
+                  "color": "#fbc02d",
+                  "y_axis": "secondary"
+                }
+              ],
+              "hours_to_show": 8,
+              "points_per_hour": 12,
+              "line_width": 3,
+              "height": 200,
+              "hour24": true,
+              "decimals": 1,
+              "show": {
+                "labels": true,
+                "extrema": true,
+                "legend": true,
+                "fill": "fade"
+              }
+            },
+            {
+              "type": "custom:mini-graph-card",
+              "name": "📈 Efektywność COP i różnica temperatur Delta T (8h)",
+              "icon": "mdi:chart-line",
+              "entities": [
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_cop_szac",
+                  "name": "COP",
+                  "color": "#4caf50"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_delta_t",
+                  "name": "Delta T (K)",
+                  "color": "#ab47bc",
+                  "y_axis": "secondary"
+                }
+              ],
+              "hours_to_show": 8,
+              "points_per_hour": 12,
+              "line_width": 3,
+              "height": 200,
+              "hour24": true,
+              "decimals": 2,
+              "show": {
+                "labels": true,
+                "extrema": true,
+                "legend": true,
+                "fill": "fade"
+              }
+            },
+            {
+              "type": "entities",
+              "title": "🌊 Hydraulika & Pompa Grundfos UPM2 K",
+              "show_header_toggle": false,
+              "entities": [
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_moc_grzewcza_szac",
+                  "name": "Wyliczona moc cieplna (przepływ 1350 l/h)"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_moc_elektryczna_szac",
+                  "name": "Wyliczona moc elektryczna (cos φ 0.90)"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_cop_szac",
+                  "name": "Chwilowy współczynnik COP"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_delta_t",
+                  "name": "Różnica temperatur ΔT (TWO - TWI)"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_pompa_obiegowa_h",
+                  "name": "Licznik motogodzin pompy Grundfos"
+                }
+              ]
+            },
+            {
+              "type": "glance",
+              "title": "❄️ Parametry układu chłodniczego i freonu R410A",
+              "columns": 4,
+              "entities": [
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_cisnienie_wysokie",
+                  "name": "Wysokie (PD)"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_cisnienie_niskie",
+                  "name": "Niskie (Ps)"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_temp_zrzutu",
+                  "name": "Temp. zrzutu (TD)"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_temp_ssania",
+                  "name": "Temp. ssania (TS)"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_temp_wymiennika",
+                  "name": "Wymiennik (TE)"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_temp_ths",
+                  "name": "Inwerter (THS)"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_wentylator",
+                  "name": "Wentylator RPM"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_pmv",
+                  "name": "Zawór PMV"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_temp_skroplin_tc",
+                  "name": "Skropliny (TC)"
+                },
+                {
+                  "entity": "binary_sensor.toshiba_estia_r410a_estia_odszranianie_defrost",
+                  "name": "Defrost"
+                },
+                {
+                  "entity": "switch.toshiba_estia_r410a_estia_tryb_cichy_agregatu",
+                  "name": "Tryb Cichy"
+                },
+                {
+                  "entity": "binary_sensor.toshiba_estia_r410a_estia_magistrala_ok",
+                  "name": "Magistrala AB"
+                }
+              ]
+            },
+            {
+              "type": "entities",
+              "title": "📊 Statystyki energii, pracy i kosztów",
+              "show_header_toggle": false,
+              "entities": [
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_cieplo_wyprodukowane_dzis",
+                  "name": "Wytworzone ciepło dziś (ESP)",
+                  "icon": "mdi:fire"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_energia_elektryczna_dzis",
+                  "name": "Pobrana energia dziś (ESP)",
+                  "icon": "mdi:lightning-bolt"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_sredni_dobowy_cop",
+                  "name": "Średni dobowy COP (ESP)",
+                  "icon": "mdi:leaf"
+                },
+                {
+                  "entity": "sensor.estia_koszt_energii_dzis_szac",
+                  "name": "Szacowany koszt (dziś)",
+                  "icon": "mdi:cash"
+                },
+                {
+                  "entity": "sensor.estia_praca_sprezarki_dzis",
+                  "name": "Czas pracy sprężarki (dziś)"
+                },
+                {
+                  "entity": "sensor.toshiba_estia_r410a_estia_sprezarka_grzanie_h",
+                  "name": "Licznik sprężarki total"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

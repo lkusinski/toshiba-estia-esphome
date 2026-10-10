@@ -1,0 +1,531 @@
+# ==============================================================================
+# Toshiba Estia R410A — Inteligentny Optymalizator Ogrzewania i Akumulacji PV
+# Lokalizacja: Wiśniowa (Dom A) — Układ grzejnikowy + 2x podłogówka łazienkowa
+# Aktualizacja: 2026-10-10 (Natywna autonomia ESP8266 + Climate C++)
+#
+# Architektura:
+# 1. Główny termostat C.O. realizowany jest natywnie przez mikrokontroler ESP:
+#    entity_id: climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1
+# 2. Hebel bezpieczeństwa sprzętowego:
+#    input_boolean.estia_master_sterowanie_dozwolone steruje
+#    switch.toshiba_estia_r410a_estia_tryb_tylko_odczyt (odcięcie TX na magistrali)
+# 3. Dynamiczna krzywa grzewcza dostosowana do instalacji grzejnikowej
+# 4. Summer Switch-Off — automatyczne wyłączanie ogrzewania w ciepłe dni (> 17°C)
+# 5. Monitorowanie temperatur wewnętrznych (Midea Salon + Biuro z korektą)
+# 6. Akumulacja termiczna przy nadwyżkach PV Wiśniowa i w strefie G12w
+# ==============================================================================
+
+input_boolean:
+  estia_master_sterowanie_dozwolone:
+    name: "Estia: Główny wyłącznik sterowania (Main Arming Switch)"
+    initial: false
+    icon: mdi:shield-check
+
+  estia_master_blokada_sterowania:
+    name: "Estia: Master blokada sterowania (Tylko odczyt)"
+    initial: false
+    icon: mdi:shield-lock
+
+  estia_optymalizator_aktywny:
+    name: "Estia: optymalizator aktywny"
+    initial: true
+    icon: mdi:robot
+
+  estia_auto_wylaczenie_lato:
+    name: "Estia: automatyczne wyłączanie w ciepłe dni (Lato)"
+    initial: true
+    icon: mdi:weather-sunny-alert
+
+input_select:
+  estia_tryb_sterowania:
+    name: "Estia: wyznaczanie temperatury w Strefie 1"
+    options:
+      - "Krzywa pogodowa + PV (Zalecany)"
+      - "Stała temperatura (Manual)"
+    initial: "Krzywa pogodowa + PV (Zalecany)"
+    icon: mdi:tune
+
+input_number:
+  estia_krzywa_offset:
+    name: "Estia: korekta krzywej (offset)"
+    min: -5.0
+    max: 5.0
+    step: 0.5
+    initial: 0.0
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-plus
+
+  estia_prog_wylaczenia_lato:
+    name: "Estia: próg wyłączenia C.O. (ciepłe dni)"
+    min: 14.0
+    max: 22.0
+    step: 0.5
+    initial: 17.0
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-chevron-up
+
+  estia_pv_boost:
+    name: "Estia: podbicie zadanej przy PV"
+    min: 0.0
+    max: 4.0
+    step: 0.5
+    initial: 2.0
+    unit_of_measurement: "°C"
+    icon: mdi:solar-power-variant
+
+  estia_pv_prog_w:
+    name: "Estia: próg mocy PV do boostu"
+    min: 500
+    max: 3500
+    step: 100
+    initial: 1200
+    unit_of_measurement: "W"
+    icon: mdi:flash-alert
+
+  estia_g12w_boost:
+    name: "Estia: podbicie w taniej strefie G12w"
+    min: 0.0
+    max: 3.0
+    step: 0.5
+    initial: 1.0
+    unit_of_measurement: "°C"
+    icon: mdi:clock-check-outline
+
+  midea_salon_offset:
+    name: "Midea Salon: korekta czujnika (offset)"
+    min: -6.0
+    max: 2.0
+    step: 0.5
+    initial: -3.0
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-minus
+
+  midea_biuro_offset:
+    name: "Midea Biuro: korekta czujnika (offset)"
+    min: -6.0
+    max: 2.0
+    step: 0.5
+    initial: -2.0
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-minus
+
+  toshiba_cena_kwh:
+    name: "Estia: cena energii (zł/kWh)"
+    min: 0.1
+    max: 3.0
+    step: 0.01
+    initial: 1.0
+    unit_of_measurement: "zł/kWh"
+    icon: mdi:cash
+
+template:
+  - binary_sensor:
+      - name: "Estia: warunki boost PV"
+        unique_id: estia_warunki_boost_pv
+        icon: mdi:solar-power
+        state: >
+          {% set pv = states('sensor.falownik_pv_wisniowa_moc_ac') | float(0) %}
+          {% set prog = states('input_number.estia_pv_prog_w') | float(1200) %}
+          {{ pv >= prog }}
+
+      - name: "Estia: tani prąd aktywny"
+        unique_id: estia_tani_prad_aktywny
+        icon: mdi:cash-check
+        state: >
+          {{ is_state('binary_sensor.i4_tania_strefa_g12w', 'on') or is_state('binary_sensor.estia_warunki_boost_pv', 'on') }}
+
+      - name: "Estia: warunki wyłączenia lato"
+        unique_id: estia_warunki_wylaczenia_lato
+        icon: mdi:sun-snowflake-variant
+        state: >
+          {% set auto_lato = is_state('input_boolean.estia_auto_wylaczenie_lato', 'on') %}
+          {% set t_zewn = states('sensor.toshiba_estia_r410a_estia_temp_zewnetrzna') | float(10.0) %}
+          {% set prog = states('input_number.estia_prog_wylaczenia_lato') | float(17.0) %}
+          {{ auto_lato and (t_zewn >= prog) }}
+
+  - sensor:
+      # --- Temperatury wewnątrz domu (Midea z korektą) ---
+      - name: "Dom: Salon temperatura (skorygowana)"
+        unique_id: dom_salon_temp_skorygowana
+        unit_of_measurement: "°C"
+        icon: mdi:sofa
+        state: >
+          {% set raw = state_attr('climate.wisniowa_salon_klimatyzator_salon', 'current_temperature') | float(24.0) %}
+          {% set off = states('input_number.midea_salon_offset') | float(-3.0) %}
+          {{ (raw + off) | round(1) }}
+
+      - name: "Dom: Biuro temperatura (skorygowana)"
+        unique_id: dom_biuro_temp_skorygowana
+        unit_of_measurement: "°C"
+        icon: mdi:desk
+        state: >
+          {% set raw = states('sensor.146235046593451_indoor_temperature') | float(22.0) %}
+          {% set off = states('input_number.midea_biuro_offset') | float(-2.0) %}
+          {{ (raw + off) | round(1) }}
+
+      - name: "Dom: Średnia temperatura wewnętrzna"
+        unique_id: dom_srednia_temperatura_wewnetrzna
+        unit_of_measurement: "°C"
+        icon: mdi:home-thermometer
+        state: >
+          {% set raw_s = state_attr('climate.wisniowa_salon_klimatyzator_salon', 'current_temperature') | float(24.0) %}
+          {% set off_s = states('input_number.midea_salon_offset') | float(-3.0) %}
+          {% set raw_b = states('sensor.146235046593451_indoor_temperature') | float(22.0) %}
+          {% set off_b = states('input_number.midea_biuro_offset') | float(-2.0) %}
+          {% set t_s = raw_s + off_s %}
+          {% set t_b = raw_b + off_b %}
+          {{ ((t_s + t_b) / 2.0) | round(1) }}
+
+      # --- Aliasy kompatybilności dla dashboardu ---
+      - name: "Dom: Salon temp skorygowana"
+        unique_id: dom_salon_temp_skorygowana_alias
+        unit_of_measurement: "°C"
+        icon: mdi:sofa
+        state: "{{ states('sensor.dom_salon_temperatura_skorygowana') }}"
+
+      - name: "Dom: Biuro temp skorygowana"
+        unique_id: dom_biuro_temp_skorygowana_alias
+        unit_of_measurement: "°C"
+        icon: mdi:desk
+        state: "{{ states('sensor.dom_biuro_temperatura_skorygowana') }}"
+
+      # --- Krzywa grzewcza dla instalacji grzejnikowej ---
+      - name: "Estia: krzywa pogodowa baza"
+        unique_id: estia_krzywa_pogodowa_baza
+        unit_of_measurement: "°C"
+        icon: mdi:chart-bell-curve
+        state: >
+          {# Krzywa grzewcza dla grzejników: -15°C -> 42°C, +17°C -> 27°C #}
+          {% set t_zewn = states('sensor.toshiba_estia_r410a_estia_temp_zewnetrzna') | float(10.0) %}
+          {% set t_min = -15.0 %}
+          {% set t_max = 17.0 %}
+          {% set sp_mroz = 42.0 %}
+          {% set sp_cieplo = 27.0 %}
+          {% if t_zewn <= t_min %}
+            {{ sp_mroz }}
+          {% elif t_zewn >= t_max %}
+            {{ sp_cieplo }}
+          {% else %}
+            {% set nachylenie = (sp_mroz - sp_cieplo) / (t_max - t_min) %}
+            {{ (sp_cieplo + (t_max - t_zewn) * nachylenie) | round(1) }}
+          {% endif %}
+
+      - name: "Estia: zadana wyliczona"
+        unique_id: estia_zadana_wyliczona
+        unit_of_measurement: "°C"
+        icon: mdi:target
+        state: >
+          {% set tryb = states('input_select.estia_tryb_sterowania') %}
+          {% if tryb == 'Stała temperatura (Manual)' %}
+            {{ state_attr('climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1', 'temperature') | float(32.0) }}
+          {% else %}
+            {% set baza = states('sensor.estia_krzywa_pogodowa_baza') | float(31.0) %}
+            {% set offset = states('input_number.estia_krzywa_offset') | float(0.0) %}
+            {% set pv_aktywne = is_state('binary_sensor.estia_warunki_boost_pv', 'on') %}
+            {% set g12_aktywne = is_state('binary_sensor.i4_tania_strefa_g12w', 'on') %}
+            {% set boost_pv = states('input_number.estia_pv_boost') | float(2.0) if pv_aktywne else 0.0 %}
+            {% set boost_g12 = states('input_number.estia_g12w_boost') | float(1.0) if (g12_aktywne and not pv_aktywne) else 0.0 %}
+            
+            {% set cel = baza + offset + boost_pv + boost_g12 %}
+            {# Bezpieczny zakres dla instalacji grzejnikowej: min 25°C, max 50°C #}
+            {{ [25.0, [cel, 50.0] | min] | max | round(1) }}
+          {% endif %}
+
+      # --- Status operacyjny agregatu ---
+      - name: "Estia: status pracy"
+        unique_id: estia_status_pracy_opisowy
+        icon: mdi:state-machine
+        state: >
+          {% set hz = states('sensor.toshiba_estia_r410a_estia_sprezarka_hz') | float(0) %}
+          {% set climate_state = states('climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1') %}
+          {% set lato = is_state('binary_sensor.estia_warunki_wylaczenia_lato', 'on') %}
+          {% set ro = is_state('switch.toshiba_estia_r410a_estia_tryb_tylko_odczyt', 'on') %}
+          {% set defrost = is_state('binary_sensor.toshiba_estia_r410a_estia_odszranianie_defrost', 'on') %}
+          {% if ro %}
+            Tylko odczyt (Blokada)
+          {% elif climate_state == 'off' and lato %}
+            Letni postój (Ciepły dzień)
+          {% elif climate_state == 'off' %}
+            Wyłączona (Czuwanie)
+          {% elif defrost %}
+            Odszranianie (Defrost)
+          {% elif hz == 0 %}
+            Postój (Histereza termostatu)
+          {% elif hz <= 18 %}
+            Grzanie modulowane (Cicha praca, min)
+          {% elif hz <= 30 %}
+            Grzanie standardowe
+          {% else %}
+            Grzanie intensywne (Wysoka moc)
+          {% endif %}
+
+      - name: "Estia: modulacja sprężarki"
+        unique_id: estia_modulacja_sprezarki_procent
+        unit_of_measurement: "%"
+        icon: mdi:gauge
+        state: >
+          {# Agregat HWS-P805HR-E pracuje w zakresie do ~60 Hz #}
+          {% set hz = states('sensor.toshiba_estia_r410a_estia_sprezarka_hz') | float(0) %}
+          {% set max_hz = 60.0 %}
+          {{ [100.0, ((hz / max_hz) * 100.0)] | min | round(0) }}
+
+      - name: "Estia: ocena efektywności"
+        unique_id: estia_ocena_efektywnosci
+        icon: mdi:leaf
+        state: >
+          {% set cop = states('sensor.toshiba_estia_r410a_estia_cop_szac') | float(0) %}
+          {% set hz = states('sensor.toshiba_estia_r410a_estia_sprezarka_hz') | float(0) %}
+          {% if hz == 0 %}
+            Brak pracy
+          {% elif cop >= 3.8 %}
+            Doskonała (A+++)
+          {% elif cop >= 3.0 %}
+            Wysoka (A++)
+          {% elif cop >= 2.4 %}
+            Umiarkowana
+          {% else %}
+            Niska
+          {% endif %}
+
+      - name: "Estia: koszt energii dziś (szac.)"
+        unique_id: estia_koszt_dzien
+        unit_of_measurement: "zł"
+        icon: mdi:cash-clock
+        state: >
+          {% set kwh = states('sensor.toshiba_estia_r410a_estia_energia_elektryczna_dzis') | float(0) %}
+          {% set c = states('input_number.toshiba_cena_kwh') | float(1.0) %}
+          {{ (kwh * c) | round(2) }}
+
+sensor:
+  - platform: history_stats
+    name: "Estia: praca sprężarki (dziś)"
+    entity_id: binary_sensor.toshiba_estia_r410a_estia_praca_sprezarki
+    state: "on"
+    type: time
+    start: "{{ today_at('00:00') }}"
+    end: "{{ now() }}"
+
+automation:
+  # ----------------------------------------------------------------------------
+  # 1. Synchronizacja Master Switcha Tylko Odczyt (Hebel bezpieczeństwa)
+  # ----------------------------------------------------------------------------
+  - id: estia_master_blokada_sterowania_sync
+    alias: "Estia: Synchronizacja Głównego Wyłącznika Sterowania (Main Switch)"
+    description: >
+      [BEZPIECZEŃSTWO SPRZĘTOWE - MAIN SAFETY ARMING SWITCH]
+      Gdy input_boolean.estia_master_sterowanie_dozwolone jest OFF:
+        - ESPHome tryb tylko odczyt jest WŁĄCZONY (odcięcie TX na poziomie procesora).
+        - Wszelkie automatyzacje sterujące są bezwzględnie zablokowane.
+      Gdy input_boolean.estia_master_sterowanie_dozwolone jest ON:
+        - ESPHome tryb tylko odczyt jest WYŁĄCZONY (zezwolenie na nadawanie).
+    mode: restart
+    trigger:
+      - platform: state
+        entity_id: input_boolean.estia_master_sterowanie_dozwolone
+      - platform: state
+        entity_id: input_boolean.estia_master_blokada_sterowania
+      - platform: homeassistant
+        event: start
+      - platform: time_pattern
+        minutes: "/10"
+    action:
+      - choose:
+          # Blokada włączona lub brak zezwolenia -> TYLKO ODCZYT (BEZPIECZNIK AKTYWNY)
+          - conditions:
+              - condition: or
+                conditions:
+                  - condition: state
+                    entity_id: input_boolean.estia_master_sterowanie_dozwolone
+                    state: "off"
+                  - condition: state
+                    entity_id: input_boolean.estia_master_blokada_sterowania
+                    state: "on"
+            sequence:
+              - action: switch.turn_on
+                target:
+                  entity_id: switch.toshiba_estia_r410a_estia_tryb_tylko_odczyt
+        default:
+          # Pełne zezwolenie na sterowanie
+          - action: switch.turn_off
+            target:
+              entity_id: switch.toshiba_estia_r410a_estia_tryb_tylko_odczyt
+
+  # ----------------------------------------------------------------------------
+  # 2. Summer Switch-Off — automatyczne wyłączanie strefy C.O. w ciepłe dni
+  # ----------------------------------------------------------------------------
+  - id: estia_zarzadzanie_letnim_wylaczeniem
+    alias: "Estia: Zarządzanie wyłączeniem w ciepłe dni (Lato)"
+    description: >
+      [OPTYMALIZACJA ENERGETYCZNA I OCHRONA PRZED TAKTOWANIEM]
+      Wyłącza natywny termostat C.O., gdy temperatura na zewnątrz przekracza próg letni
+      (domyślnie 17°C, konfigurowalny przez 'input_number.estia_prog_wylaczenia_lato').
+      Ponowne załączenie następuje z bezpieczną histerezą 1.5 K (czyli przy <= 15.5°C).
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.estia_warunki_wylaczenia_lato
+        for: "00:15:00"
+      - platform: time_pattern
+        minutes: "/30"
+    condition:
+      - condition: state
+        entity_id: input_boolean.estia_master_sterowanie_dozwolone
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.estia_master_blokada_sterowania
+        state: "off"
+      - condition: state
+        entity_id: input_boolean.estia_auto_wylaczenie_lato
+        state: "on"
+    action:
+      - choose:
+          # Warunek: za ciepło na dworze -> wyłącz strefę 1 (hvac_mode: off)
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.estia_warunki_wylaczenia_lato
+                state: "on"
+              - condition: template
+                value_template: "{{ states('climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1') != 'off' }}"
+            sequence:
+              - action: climate.set_hvac_mode
+                target:
+                  entity_id: climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1
+                data:
+                  hvac_mode: "off"
+              - action: logbook.log
+                data:
+                  name: "Estia Optymalizator"
+                  message: >
+                    Wyłączono ogrzewanie C.O. (tryb letni). Temp zewn: 
+                    {{ states('sensor.toshiba_estia_r410a_estia_temp_zewnetrzna') }}°C >= {{ states('input_number.estia_prog_wylaczenia_lato') }}°C.
+
+          # Warunek: ochłodziło się (temp zewn < próg - 1.5 K) -> włącz strefę 1 (hvac_mode: heat)
+          - conditions:
+              - condition: template
+                value_template: >
+                  {% set t_zewn = states('sensor.toshiba_estia_r410a_estia_temp_zewnetrzna') | float(10.0) %}
+                  {% set prog = states('input_number.estia_prog_wylaczenia_lato') | float(17.0) %}
+                  {{ t_zewn <= (prog - 1.5) }}
+              - condition: state
+                entity_id: climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1
+                state: "off"
+            sequence:
+              - action: climate.set_hvac_mode
+                target:
+                  entity_id: climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1
+                data:
+                  hvac_mode: "heat"
+              - action: logbook.log
+                data:
+                  name: "Estia Optymalizator"
+                  message: >
+                    Wznowiono ogrzewanie C.O. (koniec letniego postoju). Temp zewn: 
+                    {{ states('sensor.toshiba_estia_r410a_estia_temp_zewnetrzna') }}°C.
+
+  # ----------------------------------------------------------------------------
+  # 3. Aplikowanie wyliczonej zadanej temperatury (Optymalizator pogodowy + PV + G12w)
+  # ----------------------------------------------------------------------------
+  - id: estia_aplikuj_zadana_temperature
+    alias: "Estia: Aplikuj wyliczoną zadaną temperaturę"
+    description: >
+      [DYNAMIKA TEMPERATURY WODY I OCHRONA SPRZĘŻARKI PRZED ZBĘDNYMI ZMIANAMI]
+      Oblicza optymalną temperaturę wody zasilającej i przesyła ją do natywnego termostatu klimatu
+      (obsługiwanego bezpośrednio w C++ na procesorze ESP).
+      Zabezpieczenia:
+        1. Krok histerezy 1.0 K zapobiega niepotrzebnemu wysyłaniu komend przy minimalnych wahaniach.
+        2. Działa tylko przy odblokowanym heblu master i w trybie HEAT.
+    mode: single
+    trigger:
+      - platform: time_pattern
+        minutes: "/15"
+      - platform: homeassistant
+        event: start
+      - platform: state
+        entity_id: binary_sensor.estia_warunki_boost_pv
+      - platform: state
+        entity_id: binary_sensor.i4_tania_strefa_g12w
+      - platform: state
+        entity_id: input_number.estia_krzywa_offset
+      - platform: state
+        entity_id: input_select.estia_tryb_sterowania
+    condition:
+      - condition: state
+        entity_id: input_boolean.estia_master_sterowanie_dozwolone
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.estia_master_blokada_sterowania
+        state: "off"
+      - condition: state
+        entity_id: input_boolean.estia_optymalizator_aktywny
+        state: "on"
+      - condition: state
+        entity_id: input_select.estia_tryb_sterowania
+        state: "Krzywa pogodowa + PV (Zalecany)"
+      - condition: state
+        entity_id: climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1
+        state: "heat"
+      - condition: state
+        entity_id: binary_sensor.toshiba_estia_r410a_estia_magistrala_ok
+        state: "on"
+    action:
+      - variables:
+          zadana_cel: "{{ states('sensor.estia_zadana_wyliczona') | float(31.0) | round(0) }}"
+          obecna: "{{ state_attr('climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1', 'temperature') | float(31.0) }}"
+      - if:
+          - condition: template
+            value_template: "{{ (zadana_cel - obecna) | abs >= 1.0 }}"
+        then:
+          - action: climate.set_temperature
+            target:
+              entity_id: climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1
+            data:
+              temperature: "{{ zadana_cel }}"
+          - action: logbook.log
+            data:
+              name: "Estia Optymalizator"
+              message: >
+                Zmieniono nastawę strefy 1 z {{ obecna }}°C na {{ zadana_cel }}°C
+                (T_zewn: {{ states('sensor.toshiba_estia_r410a_estia_temp_zewnetrzna') }}°C,
+                 PV: {{ states('sensor.falownik_pv_wisniowa_moc_ac') }} W,
+                 G12w: {{ states('binary_sensor.i4_tania_strefa_g12w') }})
+
+  # ----------------------------------------------------------------------------
+  # 4. Alarmy krytyczne (Ochrona układu chłodniczego i powiadomienie push)
+  # ----------------------------------------------------------------------------
+  - id: estia_alarm_powiadomienie_lukasz
+    alias: "Estia: Alarmy krytyczne na telefon"
+    description: >
+      [BEZPIECZEŃSTWO AGREGATU I INSTALACJI CHŁODNICZEJ]
+      Natychmiastowe ostrzeżenie push na iPhone Łukasz o stanach przedawaryjnych.
+    mode: single
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.toshiba_estia_r410a_estia_cisnienie_wysokie
+        above: 3100
+        for: "00:03:00"
+      - platform: numeric_state
+        entity_id: sensor.toshiba_estia_r410a_estia_temp_zrzutu
+        above: 90
+        for: "00:02:00"
+      - platform: state
+        entity_id: binary_sensor.toshiba_estia_r410a_estia_blad_zdalnego_sterownika
+        to: "on"
+        for: "00:05:00"
+    condition:
+      - condition: or
+        conditions:
+          - condition: template
+            value_template: "{{ trigger.entity_id != 'sensor.toshiba_estia_r410a_estia_temp_zrzutu' }}"
+          - condition: numeric_state
+            entity_id: sensor.toshiba_estia_r410a_estia_sprezarka_hz
+            above: 5
+    action:
+      - action: notify.send_message
+        target:
+          entity_id: notify.iphone_lukasz
+        data:
+          title: "⚠️ Alarm Pompy Ciepła Estia"
+          message: >
+            Wykryto anomalię: {{ trigger.entity_id }} = {{ trigger.to_state.state }}.
+            Temp zewn: {{ states('sensor.toshiba_estia_r410a_estia_temp_zewnetrzna') }}°C,
+            Sprężarka: {{ states('sensor.toshiba_estia_r410a_estia_sprezarka_hz') }} Hz.
