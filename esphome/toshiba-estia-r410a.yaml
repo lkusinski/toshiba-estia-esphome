@@ -1126,6 +1126,8 @@ sensor:
     accuracy_decimals: 2
     device_class: energy
     state_class: total_increasing
+    filters:
+      - multiply: 0.001
 
   - platform: total_daily_energy
     name: "Estia: ciepło wyprodukowane dziś"
@@ -1135,6 +1137,8 @@ sensor:
     accuracy_decimals: 2
     device_class: energy
     state_class: total_increasing
+    filters:
+      - multiply: 0.001
 
   - platform: template
     name: "Estia: średni dobowy COP"
@@ -1145,7 +1149,7 @@ sensor:
     lambda: |-
       float eel = id(estia_energy_el_daily).state;
       float eth = id(estia_energy_th_daily).state;
-      if (eel <= 0.1f || eth <= 0.0f) return NAN;
+      if (eel <= 0.05f || eth <= 0.0f) return NAN;
       return eth / eel;
 
 button:

@@ -292,9 +292,32 @@ template:
         unit_of_measurement: "zł"
         icon: mdi:cash-clock
         state: >
-          {% set kwh = states('sensor.toshiba_estia_r410a_estia_energia_elektryczna_dzis') | float(0) %}
-          {% set c = states('input_number.toshiba_cena_kwh') | float(1.0) %}
-          {{ (kwh * c) | round(2) }}
+          {# 1. Ceny z oficjalnej integracji Energa dla Wiśniowa 9 (taryfa G12W) #}
+          {% set p_tania = states('sensor.energa_00069839_cena_poboru_strefa_2') | float(0.65) %}
+          {% set p_droga = states('sensor.energa_00069839_cena_poboru_strefa_1') | float(1.30) %}
+
+          {# 2. Liczniki strefowe utility_meter jeśli dostępne #}
+          {% set e_tania = states('sensor.estia_energia_dzis_taryfy_tania') | float(-1) %}
+          {% set e_droga = states('sensor.estia_energia_dzis_taryfy_droga') | float(-1) %}
+
+          {% if e_tania >= 0 and e_droga >= 0 and (e_tania + e_droga) > 0 %}
+            {{ (e_tania * p_tania + e_droga * p_droga) | round(2) }}
+          {% else %}
+            {# Fallback na sumaryczne zużycie dobowe Powercalc lub ESPHome z aktualną strefą #}
+            {% set kwh = states('sensor.pompa_ciepla_toshiba_estia_energy_daily') | float(0) %}
+            {% if kwh <= 0 %}
+              {% set kwh = states('sensor.toshiba_estia_r410a_estia_energia_elektryczna_dzis') | float(0) %}
+            {% endif %}
+            {% set cheap = is_state('binary_sensor.licznik_00069839_tania_strefa', 'on') %}
+            {% set cena = p_tania if cheap else p_droga %}
+            {{ (kwh * cena) | round(2) }}
+          {% endif %}
+        attributes:
+          taryfa: "{{ states('sensor.energa_00069839_taryfa') | default('G12W') }}"
+          strefa_cenowa: "{{ 'Tania (strefa 2)' if is_state('binary_sensor.licznik_00069839_tania_strefa', 'on') else 'Droga (strefa 1)' }}"
+          cena_strefa_1_droga: "{{ states('sensor.energa_00069839_cena_poboru_strefa_1') | default('1.30') }} zł/kWh"
+          cena_strefa_2_tania: "{{ states('sensor.energa_00069839_cena_poboru_strefa_2') | default('0.65') }} zł/kWh"
+          zrodlo_ceny: "Integracja Energa (Licznik 00069839, Wiśniowa 9)"
 
 sensor:
   - platform: history_stats
@@ -529,3 +552,34 @@ automation:
             Wykryto anomalię: {{ trigger.entity_id }} = {{ trigger.to_state.state }}.
             Temp zewn: {{ states('sensor.toshiba_estia_r410a_estia_temp_zewnetrzna') }}°C,
             Sprężarka: {{ states('sensor.toshiba_estia_r410a_estia_sprezarka_hz') }} Hz.
+
+  # ----------------------------------------------------------------------------
+  # 5. Synchronizacja taryfy G12W Energa dla licznika energii pompy ciepła
+  # ----------------------------------------------------------------------------
+  - id: estia_synchronizacja_taryfy_energa_g12w
+    alias: "Estia: Synchronizacja taryfy Energa G12W (Tania / Droga)"
+    description: >
+      Automatycznie przełącza strefę licznika utility_meter pompy ciepła między tanią (noc/weekend)
+      a drogą (szczyt) na podstawie stanu binary_sensor.licznik_00069839_tania_strefa.
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.licznik_00069839_tania_strefa
+      - trigger: homeassistant
+        event: start
+    actions:
+      - action: select.select_option
+        target:
+          entity_id: select.estia_energia_dzis_taryfy
+        data:
+          option: "{{ 'tania' if is_state('binary_sensor.licznik_00069839_tania_strefa', 'on') else 'droga' }}"
+
+utility_meter:
+  estia_energia_dzis_taryfy:
+    name: "Estia: energia dziś (taryfy G12W)"
+    source: sensor.pompa_ciepla_toshiba_estia_energy
+    cycle: daily
+    tariffs:
+      - tania
+      - droga
+
