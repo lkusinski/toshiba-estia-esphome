@@ -1,6 +1,6 @@
 # ==============================================================================
 # Toshiba Estia R410A — Inteligentny Optymalizator Ogrzewania i Akumulacji PV
-# Instalacja: Uniwersalny układ C.O. (Grzejniki / Podłogówka)
+# Lokalizacja: Wiśniowa (Dom A) — Układ grzejnikowy + 2x podłogówka łazienkowa
 # Aktualizacja: 2026-10-10 (Natywna autonomia ESP8266 + Climate C++)
 #
 # Architektura:
@@ -39,6 +39,11 @@ input_boolean:
     initial: false
     icon: mdi:account-alert
 
+  estia_termostat_pokojowy_odciecie:
+    name: "Estia: wyłączanie pompy przy przegrzaniu domu (Termostat)"
+    initial: true
+    icon: mdi:home-thermometer
+
 input_datetime:
   estia_ostatnia_zmiana_automatyczna:
     name: "Estia: Znacznik ostatniej zmiany automatycznej"
@@ -74,6 +79,24 @@ input_number:
     initial: 2.0
     unit_of_measurement: "K/K"
     icon: mdi:scale-balance
+
+  estia_histereza_wylaczenia_pokojowa:
+    name: "Estia: histereza wyłączenia przy przegrzaniu (+K)"
+    min: 0.1
+    max: 1.0
+    step: 0.05
+    initial: 0.2
+    unit_of_measurement: "K"
+    icon: mdi:thermometer-chevron-up
+
+  estia_histereza_zalaczenia_pokojowa:
+    name: "Estia: histereza załączenia przy niedogrzaniu (-K)"
+    min: 0.0
+    max: 1.0
+    step: 0.05
+    initial: 0.1
+    unit_of_measurement: "K"
+    icon: mdi:thermometer-chevron-down
 
   estia_krzywa_offset:
     name: "Estia: korekta krzywej (offset)"
@@ -216,7 +239,7 @@ template:
         unique_id: estia_warunki_boost_pv
         icon: mdi:solar-power
         state: >
-          {% set pv = states('sensor.falownik_pv_moc_ac') | float(0) %}
+          {% set pv = states('sensor.falownik_pv_wisniowa_moc_ac') | float(0) %}
           {% set prog = states('input_number.estia_pv_prog_w') | float(1200) %}
           {{ pv >= prog }}
 
@@ -234,6 +257,26 @@ template:
           {% set t_zewn = states('sensor.toshiba_estia_r410a_estia_temp_zewnetrzna') | float(10.0) %}
           {% set prog = states('input_number.estia_prog_wylaczenia_lato') | float(17.0) %}
           {{ auto_lato and (t_zewn >= prog) }}
+
+      - name: "Estia: żądanie grzania termostatu pokojowego"
+        unique_id: estia_zadanie_grzania_termostatu_pokojowego
+        icon: mdi:home-thermometer
+        state: >
+          {% set aktywne = is_state('input_boolean.estia_termostat_pokojowy_odciecie', 'on') %}
+          {% if not aktywne %}
+            {{ true }}
+          {% else %}
+            {% set t_dom = states('sensor.dom_srednia_temperatura_wewnetrzna') | float(21.0) %}
+            {% set t_cel = states('input_number.estia_oczekiwana_temperatura_w_domu') | float(21.0) %}
+            {% set h_wyl = states('input_number.estia_histereza_wylaczenia_pokojowa') | float(0.2) %}
+            {% set h_zal = states('input_number.estia_histereza_zalaczenia_pokojowa') | float(0.1) %}
+            {% set is_heating = is_state('climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1', 'heat') %}
+            {% if is_heating %}
+              {{ t_dom < (t_cel + h_wyl) }}
+            {% else %}
+              {{ t_dom <= (t_cel - h_zal) }}
+            {% endif %}
+          {% endif %}
 
   - sensor:
       # --- Temperatury wewnątrz domu (Midea z korektą) ---
@@ -409,8 +452,8 @@ template:
         icon: mdi:cash-clock
         state: >
           {# 1. Ceny z oficjalnej integracji Energa dla Wiśniowa 9 (taryfa G12W) #}
-          {% set p_tania = states('sensor.taryfa_g12_strefa_tania_cena') | float(0.65) %}
-          {% set p_droga = states('sensor.taryfa_g12_strefa_droga_cena') | float(1.30) %}
+          {% set p_tania = states('sensor.energa_00069839_cena_poboru_strefa_2') | float(0.65) %}
+          {% set p_droga = states('sensor.energa_00069839_cena_poboru_strefa_1') | float(1.30) %}
 
           {# 2. Zużycie energii pompy dziś (kWh) #}
           {% set e_tania = states('sensor.estia_energia_dzis_taryfy_tania') | float(0) %}
@@ -424,13 +467,13 @@ template:
           {% if (e_tania + e_droga) >= (kwh_total * 0.8) and (e_tania + e_droga) > 0 %}
             {% set wartosc_g12w = (e_tania * p_tania + e_droga * p_droga) %}
           {% else %}
-            {% set cheap = is_state('binary_sensor.tania_strefa_g12w', 'on') %}
+            {% set cheap = is_state('binary_sensor.licznik_00069839_tania_strefa', 'on') %}
             {% set cena = p_tania if cheap else p_droga %}
             {% set wartosc_g12w = (kwh_total * cena) %}
           {% endif %}
 
           {# 4. Logika Net-Metering (GithubEnerga - stary system opustów 1:0.8 z magazynem wirtualnym) #}
-          {% set bank_kwh = states('sensor.magazyn_wirtualny_prosumenta_kwh') | float(0) %}
+          {% set bank_kwh = states('sensor.energa_00069839_bank_wirtualny_kwh') | float(0) %}
           {# Dopóki bank wirtualny pokrywa zapotrzebowanie, realny koszt energii wynosi 0.00 zł #}
           {% if bank_kwh > kwh_total %}
             {{ 0.00 }}
@@ -439,33 +482,33 @@ template:
           {% endif %}
         attributes:
           system_rozliczen: "Net-Metering (stary system opustów 1:0.8)"
-          wspolczynnik_prosumencki: "{{ states('sensor.wspolczynnik_prosumencki') | default('0.8') }}"
-          magazyn_wirtualny_kwh: "{{ states('sensor.magazyn_wirtualny_prosumenta_kwh') | default('0') }} kWh"
-          pokrycie_z_magazynu: "{{ '100%' if states('sensor.magazyn_wirtualny_prosumenta_kwh')|float(0) > states('sensor.toshiba_estia_r410a_estia_energia_elektryczna_dzis')|float(0) else 'Brak' }}"
+          wspolczynnik_prosumencki: "{{ states('sensor.energa_00069839_wspolczynnik_prosumencki') | default('0.8') }}"
+          magazyn_wirtualny_kwh: "{{ states('sensor.energa_00069839_bank_wirtualny_kwh') | default('0') }} kWh"
+          pokrycie_z_magazynu: "{{ '100%' if states('sensor.energa_00069839_bank_wirtualny_kwh')|float(0) > states('sensor.toshiba_estia_r410a_estia_energia_elektryczna_dzis')|float(0) else 'Brak' }}"
           wartosc_taryfowa_g12w: >
-            {% set p_tania = states('sensor.taryfa_g12_strefa_tania_cena') | float(0.65) %}
-            {% set p_droga = states('sensor.taryfa_g12_strefa_droga_cena') | float(1.30) %}
+            {% set p_tania = states('sensor.energa_00069839_cena_poboru_strefa_2') | float(0.65) %}
+            {% set p_droga = states('sensor.energa_00069839_cena_poboru_strefa_1') | float(1.30) %}
             {% set e_tania = states('sensor.estia_energia_dzis_taryfy_tania') | float(0) %}
             {% set e_droga = states('sensor.estia_energia_dzis_taryfy_droga') | float(0) %}
             {% set kwh = states('sensor.toshiba_estia_r410a_estia_energia_elektryczna_dzis') | float(0) %}
             {% if (e_tania + e_droga) >= (kwh * 0.8) and (e_tania + e_droga) > 0 %}
               {{ (e_tania * p_tania + e_droga * p_droga) | round(2) }} zł
             {% else %}
-              {% set cheap = is_state('binary_sensor.tania_strefa_g12w', 'on') %}
+              {% set cheap = is_state('binary_sensor.licznik_00069839_tania_strefa', 'on') %}
               {% set cena = p_tania if cheap else p_droga %}
               {{ (kwh * cena) | round(2) }} zł
             {% endif %}
-          cena_strefa_1_droga: "{{ states('sensor.taryfa_g12_strefa_droga_cena') | default('1.30') }} zł/kWh"
-          cena_strefa_2_tania: "{{ states('sensor.taryfa_g12_strefa_tania_cena') | default('0.65') }} zł/kWh"
-          zrodlo_danych: "Integracja Licznika Energii / Taryfa G12w Net-Metering"
+          cena_strefa_1_droga: "{{ states('sensor.energa_00069839_cena_poboru_strefa_1') | default('1.30') }} zł/kWh"
+          cena_strefa_2_tania: "{{ states('sensor.energa_00069839_cena_poboru_strefa_2') | default('0.65') }} zł/kWh"
+          zrodlo_danych: "GithubEnerga / Integracja Energa My Meter (Licznik 00069839, Wiśniowa 9)"
 
       - name: "Estia: wartość energii dziś wg taryfy (bez PV)"
         unique_id: estia_wartosc_energii_dzis_taryfowa
         unit_of_measurement: "zł"
         icon: mdi:calculator
         state: >
-          {% set p_tania = states('sensor.taryfa_g12_strefa_tania_cena') | float(0.65) %}
-          {% set p_droga = states('sensor.taryfa_g12_strefa_droga_cena') | float(1.30) %}
+          {% set p_tania = states('sensor.energa_00069839_cena_poboru_strefa_2') | float(0.65) %}
+          {% set p_droga = states('sensor.energa_00069839_cena_poboru_strefa_1') | float(1.30) %}
           {% set e_tania = states('sensor.estia_energia_dzis_taryfy_tania') | float(0) %}
           {% set e_droga = states('sensor.estia_energia_dzis_taryfy_droga') | float(0) %}
           {% set kwh = states('sensor.toshiba_estia_r410a_estia_energia_elektryczna_dzis') | float(0) %}
@@ -475,7 +518,7 @@ template:
           {% if (e_tania + e_droga) >= (kwh * 0.8) and (e_tania + e_droga) > 0 %}
             {{ (e_tania * p_tania + e_droga * p_droga) | round(2) }}
           {% else %}
-            {% set cheap = is_state('binary_sensor.tania_strefa_g12w', 'on') %}
+            {% set cheap = is_state('binary_sensor.licznik_00069839_tania_strefa', 'on') %}
             {% set cena = p_tania if cheap else p_droga %}
             {{ (kwh * cena) | round(2) }}
           {% endif %}
@@ -622,6 +665,9 @@ automation:
               - condition: state
                 entity_id: climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1
                 state: "off"
+              - condition: state
+                entity_id: binary_sensor.estia_zadanie_grzania_termostatu_pokojowego
+                state: "on"
             sequence:
               - action: climate.set_hvac_mode
                 target:
@@ -634,6 +680,117 @@ automation:
                   message: >
                     Wznowiono ogrzewanie C.O. (koniec letniego postoju). Temp zewn: 
                     {{ states('sensor.toshiba_estia_r410a_estia_temp_zewnetrzna') }}°C.
+
+  # ----------------------------------------------------------------------------
+  # 2b. Termostat pokojowy — wyłączenie i załączenie strefy C.O. (Room Cut-off)
+  # ----------------------------------------------------------------------------
+  - id: estia_termostat_pokojowy_zarzadzanie_strefa
+    alias: "Estia: Termostat pokojowy — wyłączenie i załączenie strefy C.O."
+    description: >
+      [FUNKCJA TERMOSTATU POKOJOWEGO - ROOM CUT-OFF]
+      Gdy średnia temperatura w domu przekroczy zadaną + histerezę wyłączenia (domyślnie +0.2 K),
+      pompa ciepła jest całkowicie wyłączana (hvac_mode: off), co zapobiega przegrzewaniu domu
+      i nocnemu taktowaniu sprężarki przy minimalnej mocy.
+      Gdy temperatura w domu spadnie poniżej zadanej - histerezę załączenia (domyślnie -0.1 K),
+      ogrzewanie zostaje wznowione (hvac_mode: heat) z optymalną nastawą wyliczoną z krzywej.
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.estia_zadanie_grzania_termostatu_pokojowego
+      - platform: state
+        entity_id: input_boolean.estia_termostat_pokojowy_odciecie
+      - platform: state
+        entity_id: input_number.estia_oczekiwana_temperatura_w_domu
+      - platform: state
+        entity_id: sensor.dom_srednia_temperatura_wewnetrzna
+      - platform: time_pattern
+        minutes: "/10"
+    condition:
+      - condition: state
+        entity_id: input_boolean.estia_master_sterowanie_dozwolone
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.estia_master_blokada_sterowania
+        state: "off"
+      - condition: state
+        entity_id: input_boolean.estia_optymalizator_aktywny
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.estia_manual_override
+        state: "off"
+      - condition: state
+        entity_id: input_boolean.estia_termostat_pokojowy_odciecie
+        state: "on"
+      - condition: state
+        entity_id: binary_sensor.toshiba_estia_r410a_estia_magistrala_ok
+        state: "on"
+    action:
+      - choose:
+          # Przypadek 1: Termostat mówi stop (przegrzanie) -> wyłącz strefę C.O.
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.estia_zadanie_grzania_termostatu_pokojowego
+                state: "off"
+              - condition: template
+                value_template: "{{ states('climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1') != 'off' }}"
+            sequence:
+              - action: climate.set_hvac_mode
+                target:
+                  entity_id: climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1
+                data:
+                  hvac_mode: "off"
+              - action: logbook.log
+                data:
+                  name: "Estia Termostat Pokojowy"
+                  message: >
+                    Wyłączono ogrzewanie C.O. (przegrzanie domu). Temp średnia: 
+                    {{ states('sensor.dom_srednia_temperatura_wewnetrzna') }}°C >= ({{ states('input_number.estia_oczekiwana_temperatura_w_domu') }}°C + {{ states('input_number.estia_histereza_wylaczenia_pokojowa') }}K).
+              - event: estia_akcja_sterowania
+                event_data:
+                  akcja: "Termostat: wyłączenie C.O. (przegrzanie)"
+                  szczegoly: "Średnia {{ states('sensor.dom_srednia_temperatura_wewnetrzna') }}°C (cel: {{ states('input_number.estia_oczekiwana_temperatura_w_domu') }}°C)"
+                  zrodlo: "Termostat pokojowy (Room Cut-off)"
+
+          # Przypadek 2: Termostat mówi grzej (niedogrzanie) i nie ma trybu letniego -> włącz strefę C.O.
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.estia_zadanie_grzania_termostatu_pokojowego
+                state: "on"
+              - condition: state
+                entity_id: binary_sensor.estia_warunki_wylaczenia_lato
+                state: "off"
+              - condition: state
+                entity_id: climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1
+                state: "off"
+            sequence:
+              - action: input_datetime.set_datetime
+                target:
+                  entity_id: input_datetime.estia_ostatnia_zmiana_automatyczna
+                data:
+                  datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+              - action: climate.set_hvac_mode
+                target:
+                  entity_id: climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1
+                data:
+                  hvac_mode: "heat"
+              - delay: 2
+              - action: climate.set_temperature
+                target:
+                  entity_id: climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1
+                data:
+                  temperature: "{{ states('sensor.estia_zadana_wyliczona') | float(30.0) | round(0) }}"
+              - action: logbook.log
+                data:
+                  name: "Estia Termostat Pokojowy"
+                  message: >
+                    Wznowiono ogrzewanie C.O. (żądanie dogrzania). Temp średnia: 
+                    {{ states('sensor.dom_srednia_temperatura_wewnetrzna') }}°C <= ({{ states('input_number.estia_oczekiwana_temperatura_w_domu') }}°C - {{ states('input_number.estia_histereza_zalaczenia_pokojowa') }}K).
+                    Zadana wody: {{ states('sensor.estia_zadana_wyliczona') | round(0) }}°C.
+              - event: estia_akcja_sterowania
+                event_data:
+                  akcja: "Termostat: wznowienie C.O. (dogrzanie)"
+                  szczegoly: "Średnia {{ states('sensor.dom_srednia_temperatura_wewnetrzna') }}°C, woda: {{ states('sensor.estia_zadana_wyliczona') | round(0) }}°C"
+                  zrodlo: "Termostat pokojowy (Room Cut-off)"
 
   # ----------------------------------------------------------------------------
   # 3. Aplikowanie wyliczonej zadanej temperatury (Optymalizator pogodowy + PV + G12w)
@@ -713,7 +870,7 @@ automation:
               message: >
                 Zmieniono nastawę strefy 1 z {{ obecna }}°C na {{ zadana_cel }}°C
                 (T_zewn: {{ states('sensor.toshiba_estia_r410a_estia_temp_zewnetrzna') }}°C,
-                 PV: {{ states('sensor.falownik_pv_moc_ac') }} W,
+                 PV: {{ states('sensor.falownik_pv_wisniowa_moc_ac') }} W,
                  G12w: {{ states('binary_sensor.i4_tania_strefa_g12w') }})
 
   # ----------------------------------------------------------------------------
@@ -764,11 +921,11 @@ automation:
     alias: "Estia: Synchronizacja taryfy Energa G12W (Tania / Droga)"
     description: >
       Automatycznie przełącza strefę licznika utility_meter pompy ciepła między tanią (noc/weekend)
-      a drogą (szczyt) na podstawie stanu binary_sensor.tania_strefa_g12w.
+      a drogą (szczyt) na podstawie stanu binary_sensor.licznik_00069839_tania_strefa.
     mode: single
     triggers:
       - trigger: state
-        entity_id: binary_sensor.tania_strefa_g12w
+        entity_id: binary_sensor.licznik_00069839_tania_strefa
       - trigger: homeassistant
         event: start
     actions:
@@ -776,7 +933,7 @@ automation:
         target:
           entity_id: select.estia_energia_dzis_taryfy
         data:
-          option: "{{ 'tania' if is_state('binary_sensor.tania_strefa_g12w', 'on') else 'droga' }}"
+          option: "{{ 'tania' if is_state('binary_sensor.licznik_00069839_tania_strefa', 'on') else 'droga' }}"
 
   # ----------------------------------------------------------------------------
   # 6. Detekcja ręcznej nastawy (Manual Override na pilocie lub w UI)
