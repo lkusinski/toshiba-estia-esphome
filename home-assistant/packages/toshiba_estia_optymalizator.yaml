@@ -44,6 +44,11 @@ input_boolean:
     initial: true
     icon: mdi:home-thermometer
 
+  estia_dokoncz_cykl_sprezarki:
+    name: "Estia: dokończ cykl sprężarki przed wyłączeniem C.O."
+    initial: true
+    icon: mdi:timer-sync-outline
+
 input_datetime:
   estia_ostatnia_zmiana_automatyczna:
     name: "Estia: Znacznik ostatniej zmiany automatycznej"
@@ -732,7 +737,12 @@ automation:
       - platform: state
         entity_id: binary_sensor.estia_zadanie_grzania_termostatu_pokojowego
       - platform: state
+        entity_id: binary_sensor.estia_sprezarka_pracuje
+        to: "off"
+      - platform: state
         entity_id: input_boolean.estia_termostat_pokojowy_odciecie
+      - platform: state
+        entity_id: input_boolean.estia_dokoncz_cykl_sprezarki
       - platform: state
         entity_id: input_number.estia_oczekiwana_temperatura_w_domu
       - platform: state
@@ -760,13 +770,20 @@ automation:
         state: "on"
     action:
       - choose:
-          # Przypadek 1: Termostat mówi stop (przegrzanie) -> wyłącz strefę C.O.
+          # Przypadek 1: Termostat mówi stop (przegrzanie) -> wyłącz strefę C.O.,
+          # z poszanowaniem trwającego cyklu sprężarki (Finish Cycle Protection)
           - conditions:
               - condition: state
                 entity_id: binary_sensor.estia_zadanie_grzania_termostatu_pokojowego
                 state: "off"
               - condition: template
                 value_template: "{{ states('climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1') != 'off' }}"
+              - condition: template
+                value_template: >
+                  {# Jeśli ochrona dokończenia cyklu jest włączona, czekamy aż sprężarka sama zgaśnie (sprezarka == off) #}
+                  {% set dokoncz_cykl = is_state('input_boolean.estia_dokoncz_cykl_sprezarki', 'on') %}
+                  {% set sprezarka_pracuje = is_state('binary_sensor.estia_sprezarka_pracuje', 'on') %}
+                  {{ not (dokoncz_cykl and sprezarka_pracuje) }}
             sequence:
               - action: climate.set_hvac_mode
                 target:
@@ -777,13 +794,13 @@ automation:
                 data:
                   name: "Estia Termostat Pokojowy"
                   message: >
-                    Wyłączono ogrzewanie C.O. (przegrzanie domu). Temp średnia: 
+                    Wyłączono ogrzewanie C.O. (przegrzanie domu, cykl sprężarki zakończony). Temp średnia: 
                     {{ states('sensor.dom_srednia_temperatura_wewnetrzna') }}°C >= ({{ states('input_number.estia_oczekiwana_temperatura_w_domu') }}°C + {{ states('input_number.estia_histereza_wylaczenia_pokojowa') }}K).
               - event: estia_akcja_sterowania
                 event_data:
                   akcja: "Termostat: wyłączenie C.O. (przegrzanie)"
-                  szczegoly: "Średnia {{ states('sensor.dom_srednia_temperatura_wewnetrzna') }}°C (cel: {{ states('input_number.estia_oczekiwana_temperatura_w_domu') }}°C)"
-                  zrodlo: "Termostat pokojowy (Room Cut-off)"
+                  szczegoly: "Średnia {{ states('sensor.dom_srednia_temperatura_wewnetrzna') }}°C (cykl zakończony)"
+                  zrodlo: "Termostat pokojowy (Finish Cycle)"
 
           # Przypadek 2: Termostat mówi grzej (niedogrzanie) i nie ma trybu letniego -> włącz strefę C.O.
           - conditions:
