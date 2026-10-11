@@ -45,6 +45,11 @@ Projekt zawiera:
    * Wyeliminowano problem restartów płytki podczas bezprzewodowego wgrywania oprogramowania (OTA) poprzez optymalizację mocy Wi-Fi (`output_power: 14.0dBm`).
    * Wizualna sygnalizacja stanu magistrali i połączenia niebieską diodą LED na **GPIO2**.
    * Sprzętowy hebel bezpieczeństwa (`read_only_switch: ALWAYS_ON`) odcina nadawanie na magistralę na poziomie procesora.
+7. **Autoadaptacja i kompensacja pokojowa (Room Temperature Feedback):**
+   * Bezpośrednie zadawanie pożądanej temperatury w domu (`input_number.estia_oczekiwana_temperatura_w_domu`, np. 21.0°C) – algorytm sam dynamicznie koryguje temperaturę wody zasilającej z zachowaniem bezpiecznego clampingu.
+8. **Nadzór operacyjny, ochrona nastaw i audyt cykliczności:**
+   * **Koszyk FIFO 5 ostatnich akcji:** rozróżnianie ingerencji domownika na pilocie ściennym od korekt automatycznych, ochrona nastawy ręcznej (`Manual Override`) oraz przycisk natychmiastowego powrotu do automatyki pogodowej.
+   * **Monitoring taktowania sprężarki:** sensory `history_stats` zliczające cykle pracy w oknach 1h, 24h i od północy.
 
 ---
 

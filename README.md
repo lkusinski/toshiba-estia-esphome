@@ -44,6 +44,11 @@ Tested and verified on live hardware:
    * Solved OTA brownout resets on bus-powered boards by tuning Wi-Fi TX power (`output_power: 14.0dBm`).
    * Visual bus activity feedback via onboard blue LED on **GPIO2**.
    * Hardware safety read-only interlock (`read_only_switch: ALWAYS_ON` on boot) cuts TX line at the microcontroller level.
+7. **Room Temperature Feedback & Auto-Adaptation:**
+   * Direct target room temperature adjustment (`input_number.estia_oczekiwana_temperatura_w_domu`, e.g. 21.0°C) with dynamic heating water curve compensation ($K_p$) and safety clamping.
+8. **Operational Oversight, Manual Override Protection & Compressor Cycle Monitoring:**
+   * **5-Item FIFO Action Log:** Distinguishes physical wired remote adjustments from automated adjustments, protects manual overrides, and provides an instant one-click return to automation.
+   * **Anti-Cycling Telemetry:** Real-time `history_stats` sensors tracking compressor starts over 1-hour, 24-hour, and daily intervals.
 
 ---
 
