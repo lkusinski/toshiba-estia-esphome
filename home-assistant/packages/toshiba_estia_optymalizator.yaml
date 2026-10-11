@@ -192,16 +192,38 @@ template:
           {% else %}
             {% set old_val = trigger.from_state.state if trigger.from_state is not none else '?' %}
             {% set new_val = trigger.to_state.state if trigger.to_state is not none else '?' %}
-            {{ 'Zmiana zadanej: ' ~ old_val ~ '°C -> ' ~ new_val ~ '°C' }}
+            {% set t_wyliczona = states('sensor.estia_zadana_wyliczona') | float(30.0) | round(0) %}
+            {% if (new_val | float(-999)) == t_wyliczona %}
+              {{ 'Autoadaptacja: ' ~ old_val ~ '°C -> ' ~ new_val ~ '°C' }}
+            {% else %}
+              {{ 'Zmiana zadanej: ' ~ old_val ~ '°C -> ' ~ new_val ~ '°C' }}
+            {% endif %}
           {% endif %}
         attributes:
           ostatnia_akcja_czas: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
           historia: >
             {% set default_hist = [
-              {'czas': '10.10 11:08:05', 'akcja': 'Przywrócono sterowanie automatyczne', 'szczegoly': 'Zadana z krzywej: 30°C', 'zrodlo': 'Home Assistant (Optymalizator)'},
-              {'czas': '10.10 07:11:21', 'akcja': 'Ręczna zmiana nastawy', 'szczegoly': '31.0°C -> 32.0°C', 'zrodlo': 'Pilot naścienny (0x60)'}
+              {'czas': '11.10 02:00:27', 'akcja': 'Autoadaptacja: korekta wody', 'szczegoly': '31.0°C -> 30.0°C', 'zrodlo': 'Optymalizator HA (Autoadaptacja)'},
+              {'czas': '11.10 01:31:00', 'akcja': 'Przywrócono sterowanie automatyczne', 'szczegoly': 'Zadana z krzywej: 31°C', 'zrodlo': 'Przycisk (Pushbutton HA)'},
+              {'czas': '10.10 20:36:40', 'akcja': 'Przywrócono sterowanie automatyczne', 'szczegoly': 'Zadana z krzywej: 30°C', 'zrodlo': 'Przycisk (Pushbutton HA)'},
+              {'czas': '10.10 20:36:33', 'akcja': 'Przywrócono sterowanie automatyczne', 'szczegoly': 'Zadana z krzywej: 30°C', 'zrodlo': 'Przycisk (Pushbutton HA)'},
+              {'czas': '10.10 16:30:11', 'akcja': 'Ręczna zmiana nastawy', 'szczegoly': '30.0°C -> 31.0°C', 'zrodlo': 'Pilot naścienny (0x60) / UI'}
             ] %}
-            {% set current_history = this.attributes.historia | default(default_hist, true) %}
+            {% set raw_hist = this.attributes.historia | default(default_hist, true) %}
+            {% set ns = namespace(items=[]) %}
+            {% for item in raw_hist %}
+              {% if item.czas == '11.10 02:00:27' and 'Ręczna' in item.akcja %}
+                {% set ns.items = ns.items + [{
+                  'czas': '11.10 02:00:27',
+                  'akcja': 'Autoadaptacja: korekta wody',
+                  'szczegoly': '31.0°C -> 30.0°C',
+                  'zrodlo': 'Optymalizator HA (Autoadaptacja)'
+                }] %}
+              {% else %}
+                {% set ns.items = ns.items + [item] %}
+              {% endif %}
+            {% endfor %}
+            {% set current_history = ns.items %}
             {% if trigger.platform == 'event' %}
               {% set nowy_wpis = {
                 'czas': now().strftime('%d.%m %H:%M:%S'),
@@ -215,14 +237,26 @@ template:
               {% set jest_auto = (as_timestamp(now()) - auto_ts) < 20 %}
               {% set old_val = trigger.from_state.state if trigger.from_state is not none else '?' %}
               {% set new_val = trigger.to_state.state if trigger.to_state is not none else '?' %}
-              {% if old_val != new_val and old_val not in ['unavailable', 'unknown'] and new_val not in ['unavailable', 'unknown'] and not jest_auto %}
-                {% set nowy_wpis = {
-                  'czas': now().strftime('%d.%m %H:%M:%S'),
-                  'akcja': 'Ręczna zmiana nastawy',
-                  'szczegoly': old_val ~ '°C -> ' ~ new_val ~ '°C',
-                  'zrodlo': 'Pilot naścienny (0x60) / UI'
-                } %}
-                {{ ([nowy_wpis] + current_history)[:5] }}
+              {% set t_wyliczona = states('sensor.estia_zadana_wyliczona') | float(30.0) | round(0) %}
+              {% set jest_zgodna = (new_val | float(-999)) == t_wyliczona %}
+              {% if old_val != new_val and old_val not in ['unavailable', 'unknown'] and new_val not in ['unavailable', 'unknown'] %}
+                {% if jest_auto or jest_zgodna %}
+                  {% set nowy_wpis = {
+                    'czas': now().strftime('%d.%m %H:%M:%S'),
+                    'akcja': 'Autoadaptacja: korekta wody',
+                    'szczegoly': old_val ~ '°C -> ' ~ new_val ~ '°C',
+                    'zrodlo': 'Optymalizator HA (Autoadaptacja)'
+                  } %}
+                  {{ ([nowy_wpis] + current_history)[:5] }}
+                {% else %}
+                  {% set nowy_wpis = {
+                    'czas': now().strftime('%d.%m %H:%M:%S'),
+                    'akcja': 'Ręczna zmiana nastawy',
+                    'szczegoly': old_val ~ '°C -> ' ~ new_val ~ '°C',
+                    'zrodlo': 'Pilot naścienny (0x60) / UI'
+                  } %}
+                  {{ ([nowy_wpis] + current_history)[:5] }}
+                {% endif %}
               {% else %}
                 {{ current_history }}
               {% endif %}
@@ -952,9 +986,12 @@ automation:
       - condition: template
         value_template: >
           {% set auto_ts = as_timestamp(states('input_datetime.estia_ostatnia_zmiana_automatyczna') | default('1970-01-01 00:00:00')) %}
+          {% set jest_auto = (as_timestamp(now()) - auto_ts) < 20 %}
           {% set old_v = trigger.from_state.state if trigger.from_state is not none else '?' %}
           {% set new_v = trigger.to_state.state if trigger.to_state is not none else '?' %}
-          {{ (as_timestamp(now()) - auto_ts) >= 20 and old_v != new_v and old_v not in ['unavailable','unknown'] and new_v not in ['unavailable','unknown'] }}
+          {% set t_wyliczona = states('sensor.estia_zadana_wyliczona') | float(30.0) | round(0) %}
+          {% set jest_zgodna = (new_v | float(-999)) == t_wyliczona %}
+          {{ old_v != new_v and old_v not in ['unavailable','unknown'] and new_v not in ['unavailable','unknown'] and not jest_auto and not jest_zgodna }}
     action:
       - action: input_boolean.turn_on
         target:
