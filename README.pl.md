@@ -45,8 +45,9 @@ Projekt zawiera:
    * Wyeliminowano problem restartów płytki podczas bezprzewodowego wgrywania oprogramowania (OTA) poprzez optymalizację mocy Wi-Fi (`output_power: 14.0dBm`).
    * Wizualna sygnalizacja stanu magistrali i połączenia niebieską diodą LED na **GPIO2**.
    * Sprzętowy hebel bezpieczeństwa (`read_only_switch: ALWAYS_ON`) odcina nadawanie na magistralę na poziomie procesora.
-7. **Autoadaptacja i kompensacja pokojowa (Room Temperature Feedback):**
-   * Bezpośrednie zadawanie pożądanej temperatury w domu (`input_number.estia_oczekiwana_temperatura_w_domu`, np. 21.0°C) – algorytm sam dynamicznie koryguje temperaturę wody zasilającej z zachowaniem bezpiecznego clampingu.
+7. **Autoadaptacja i Termostat Pokojowy (Room Cut-off):**
+   * Bezpośrednie zadawanie pożądanej temperatury w domu (`input_number.estia_oczekiwana_temperatura_w_domu`, np. 21.0°C) – algorytm sam dynamicznie koryguje temperaturę wody zasilającej ze sprzężeniem Kp.
+   * **Podwójna histereza Schmitta Room Cut-off:** Gdy temperatura w domu przekroczy cel o próg wyłączenia (>= +0,2 K), obieg grzewczy jest całkowicie wyłączany (`hvac_mode: off`), zatrzymując sprężarkę i pompę obiegową w okresach przejściowych. Automatyczne wznowienie (`hvac_mode: heat`) następuje po schłodzeniu budynku (<= -0,1 K).
 8. **Nadzór operacyjny, ochrona nastaw i audyt cykliczności:**
    * **Koszyk FIFO 5 ostatnich akcji:** rozróżnianie ingerencji domownika na pilocie ściennym od korekt automatycznych, ochrona nastawy ręcznej (`Manual Override`) oraz przycisk natychmiastowego powrotu do automatyki pogodowej.
    * **Monitoring taktowania sprężarki:** sensory `history_stats` zliczające cykle pracy w oknach 1h, 24h i od północy.
