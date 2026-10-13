@@ -9,9 +9,9 @@
 [![GitHub Fork](https://img.shields.io/badge/Fork-makusets%2Fesphome--toshiba--ab-green.svg)](https://github.com/lkusinski/esphome-toshiba-ab)
 
 > [!NOTE]
-> **Complete Turnkey Solution & Upstream Fork:**
+> **Complete Turnkey Solution & Upstream Merge:**
 > This repository provides a complete, turnkey Home Assistant & ESPHome integration suite for Toshiba Estia Series 4 & 5 heat pumps (including packages, Lovelace dashboards, and protocol documentation). It includes an enhanced, standalone build of the `toshiba_ab` component.  
-> Our official GitHub fork of the upstream component is available at [**lkusinski/esphome-toshiba-ab**](https://github.com/lkusinski/esphome-toshiba-ab) (forked from [makusets/esphome-toshiba-ab](https://github.com/makusets/esphome-toshiba-ab)). All fixes and enhancements have been submitted upstream via [**Pull Request #243**](https://github.com/makusets/esphome-toshiba-ab/pull/243) (resolving [Issue #242](https://github.com/makusets/esphome-toshiba-ab/issues/242)).
+> Our enhancements and fixes have been officially merged into the upstream repository via [**Pull Request #245**](https://github.com/makusets/esphome-toshiba-ab/pull/245) (resolving [Issue #242](https://github.com/makusets/esphome-toshiba-ab/issues/242)).
 
 Autonomous **ESPHome C++ firmware** and **Home Assistant package** for direct interfacing with **Toshiba Estia** air-to-water heat pumps (Series 4 & 5 Hipower, R410A / R32) over the 2-wire unpolarized **AB communication bus (AW-LINK)**.
 
@@ -25,29 +25,37 @@ Tested and verified on live hardware:
 
 ## ⚙️ Key Features
 
-1. **Native ESPHome Climate Entity (`climate` in C++):**
+1. **Native ESPHome Climate Entity (`climate` in C++) with 0.5 K Resolution:**
    * Eliminates the need for fragile `climate_template` or mode synchronization automations in Home Assistant.
    * Directly controls heat pump operating modes (`OFF`, `HEAT`, `AUTO` weather compensation) and water setpoint target (20–55 °C) via native frames (`0x21`, `0x24:01`, `0x23:02`).
-2. **Zone 1 Water Temperature Decoding (Byte 13):**
+   * **Natively supports 0.5°C steps:** The AW-LINK bus natively accepts half-degree granularity even though the physical remote only allows full degrees! Exposes `target_temp_step: 0.5` in Home Assistant for refined radiator curve tuning (e.g. 31.5°C).
+2. **Hardware Inverter Modulation Limit (Silent Mode 30 Hz):**
+   * Eliminates short cycling during mild weather caused by the aggressive factory 42–48 Hz startup surge.
+   * Capping the inverter frequency to **30.0 Hz** via the native Silent Mode frame (`0x24:04`) lets the heat pump gently ramp into heating without tripping the +2 K water limit. Extends runs to continuous **30+ minute cycles** down to **10–11 Hz** with daily **COP reaching 7.7**.
+3. **Zone 1 Water Temperature Decoding (Byte 13):**
    * Addresses the persistent `-16°C` error in earlier community implementations (which read byte 14). Supply temperature is decoded from **byte 13** ($T = \text{raw}[13]/2 - 16$).
-3. **Installer Field Settings (DN Codes) via Bus:**
+4. **Installer Field Settings (DN Codes) via Bus:**
    * Direct EEPROM parameter control over the AB line using reverse-engineered installer frames (`0x1C` write and `0x1A:F1` query).
    * Remotely adjust thermostat hysteresis (DN 25/26), Grundfos pump speed (DN 36), compressor current limit (DN 68), and heating curve shift (DN 27) without touching the wall controller!
-4. **Complete Refrigeration Circuit Telemetry:**
+5. **Complete Refrigeration Circuit Telemetry & Remote Temp:**
    * High pressure ($P_D$) & low pressure ($P_S$) in kPa.
    * Discharge temp ($T_D$), suction temp ($T_S$), heat exchanger temp ($T_E$), inverter fin temp ($T_{HS}$), and liquid temp ($T_C$).
+   * Ambient temperature from the wired wall remote controller decoded directly from bus packets (`0x81`).
    * Compressor modulation (Hz), PMV expansion valve steps, and DC fan RPM.
-5. **On-Device COP & Energy Metering:**
+6. **On-Device COP & Energy Metering:**
    * Real-time thermal and electrical power estimation computed directly on the microcontroller.
    * Daily thermal energy produced (kWh), electrical energy consumed (kWh), and average daily COP without overloading Home Assistant's database.
-6. **Reliable AB Bus Power & OTA Stability:**
+7. **Reliable AB Bus Power & OTA Stability:**
    * Solved OTA brownout resets on bus-powered boards by tuning Wi-Fi TX power (`output_power: 14.0dBm`).
    * Visual bus activity feedback via onboard blue LED on **GPIO2**.
    * Hardware safety read-only interlock (`read_only_switch: ALWAYS_ON` on boot) cuts TX line at the microcontroller level.
-7. **Room Temperature Feedback & Room Cut-off Thermostat:**
+8. **Room Temperature Feedback & Room Cut-off Thermostat:**
    * Direct target room temperature adjustment (`input_number.estia_oczekiwana_temperatura_w_domu`, e.g. 21.0°C) with dynamic heating water curve compensation ($K_p$).
    * **Dual-Hysteresis Room Cut-off:** When the house exceeds the target temperature by the turn-off threshold (>= +0.2 K), the heating zone completely powers down (`hvac_mode: off`), shutting down both compressor and circulating pump to eliminate short cycling during mild weather. Automatically restarts (`hvac_mode: heat`) once the home cools down (<= -0.1 K).
-8. **Operational Oversight, Manual Override Protection & Compressor Cycle Monitoring:**
+9. **Physical Electricity Submeter Validation & Drift Calibration:**
+   * Built-in Home Assistant audit helpers and sensors (`input_number.estia_licznik_fizyczny_stan`) comparing physical DIN-rail electricity submeter readings against bus telemetry.
+   * Real-time calculation of absolute difference (kWh), relative error (%), and calibration factor $k = \Delta E_{\text{fiz}} / \Delta E_{\text{HA}}$ to verify auxiliary consumption (Grundfos pump, hydrobox PCB, crankcase heater).
+10. **Operational Oversight, Manual Override Protection & Compressor Cycle Monitoring:**
    * **5-Item FIFO Action Log:** Distinguishes physical wired remote adjustments from automated adjustments, protects manual overrides, and provides an instant one-click return to automation.
    * **Anti-Cycling Telemetry:** Real-time `history_stats` sensors tracking compressor starts over 1-hour, 24-hour, and daily intervals.
 

@@ -223,11 +223,14 @@ climate:
       name: "Estia: ogrzewanie strefy 1"
       id: estia_zone1_climate
 
-    # --- Temperatury dekodowane z ramek statusu ---
+    # --- Temperatury dekodowane z ramek statusu i pilota ---
     zone1_water_temperature:
       name: "Estia: temp. wody strefy 1"
     zone1_target_temperature:
       name: "Estia: zadana strefy — odczyt"
+    remote_temperature:
+      name: "Estia: temperatura pilota (garaż)"
+      id: estia_temp_pilota_garaz
 
     ############################################################################
     # TELEMETRIA ZAPYTYWANA PO MAGISTRALI AB (first-gen)

@@ -1363,7 +1363,7 @@ climate::ClimateTraits ToshibaAbEstiaZone1Climate::traits() {
       {climate::CLIMATE_MODE_OFF, climate::CLIMATE_MODE_HEAT, climate::CLIMATE_MODE_AUTO});
   traits.set_visual_min_temperature(20);
   traits.set_visual_max_temperature(55);
-  traits.set_visual_temperature_step(1.0);
+  traits.set_visual_temperature_step(0.5);
   return traits;
 }
 
@@ -2002,6 +2002,9 @@ void ToshibaAbClimate::process_received_data(const struct DataFrame *frame) {
         // tcc_state.room_temp = rmt; we don't update the state here, we wait for the next status update from master
         log_data_frame("Remote temperature", frame);
         ESP_LOGD(TAG, "Toshiba Wall Remote reports: %.1f °C", rmt);
+        if (this->remote_room_temp_sensor_ != nullptr) {
+          this->remote_room_temp_sensor_->publish_state(rmt);
+        }
         this->update_remote_error_(false);
         // sync_from_received_state(); we don't update the state, we wait for the next status update from master
         // remote temperature is sent regardless of DN32 setting, ac decides wether to use it or ignore it
@@ -2185,6 +2188,9 @@ void ToshibaAbClimate::process_received_data_tu2c_(const struct DataFrame *frame
         static_cast<float>(raw_temp) / TEMPERATURE_CONVERSION_RATIO - TEMPERATURE_CONVERSION_OFFSET;
     tcc_state.room_temp = room_temp;
     ESP_LOGD(TAG, "Remote %02X room temp: %.1f", source, room_temp);
+    if (this->remote_room_temp_sensor_ != nullptr) {
+      this->remote_room_temp_sensor_->publish_state(room_temp);
+    }
     return;
   }
 
@@ -4216,7 +4222,16 @@ void ToshibaAbClimate::process_received_data_estia_first_gen_(const DataFrame *f
   }
   if (has_master_keepalive_signature && is_possible_master_source)
     this->record_discovered_address_(src, false);
-  if (has_remote_ping_signature && is_remote_source) this->record_discovered_address_(src, true);
+  if (has_remote_ping_signature && is_remote_source) {
+    this->record_discovered_address_(src, true);
+    if (len >= 11 && frame->raw[6] == 0x81 && this->remote_room_temp_sensor_ != nullptr) {
+      const uint8_t enc_t = frame->raw[9];
+      if (enc_t > 0) {
+        const float room_temp = static_cast<float>(enc_t) / 2.0f - 16.0f;
+        this->remote_room_temp_sensor_->publish_state(room_temp);
+      }
+    }
+  }
   if (has_master_keepalive_signature && is_possible_master_source) {
     if (this->master_address_auto_ && !this->master_address_confirmed_ && src != this->master_address_) {
       ESP_LOGI(TAG, "Estia first-gen master keepalive from 0x%02X; switching master address from 0x%02X",

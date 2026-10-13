@@ -57,6 +57,18 @@ input_datetime:
     initial: "2026-10-10 11:08:00"
     icon: mdi:clock-check
 
+  estia_licznik_fizyczny_data_bazy:
+    name: "Estia: Data i czas zapisu bazy podlicznika"
+    has_date: true
+    has_time: true
+    icon: mdi:calendar-clock
+
+  estia_licznik_fizyczny_data_ostatniego_odczytu:
+    name: "Estia: Data i czas ostatniego odczytu podlicznika"
+    has_date: true
+    has_time: true
+    icon: mdi:clock-check
+
 input_select:
   estia_tryb_sterowania:
     name: "Estia: wyznaczanie temperatury w Strefie 1"
@@ -175,10 +187,41 @@ input_number:
     unit_of_measurement: "zł/kWh"
     icon: mdi:cash
 
+  estia_licznik_fizyczny_stan:
+    name: "Estia: Fizyczny stan podlicznika prądu"
+    min: 0.0
+    max: 999999.0
+    step: 0.01
+    mode: box
+    unit_of_measurement: "kWh"
+    icon: mdi:counter
+
+  estia_licznik_fizyczny_baza:
+    name: "Estia: Fizyczny stan początkowy (baza)"
+    min: 0.0
+    max: 999999.0
+    step: 0.01
+    mode: box
+    unit_of_measurement: "kWh"
+    icon: mdi:flag-checkered
+
+  estia_licznik_ha_baza:
+    name: "Estia: Stan licznika HA w momencie zapisu bazy"
+    min: 0.0
+    max: 999999.0
+    step: 0.001
+    mode: box
+    unit_of_measurement: "kWh"
+    icon: mdi:home-assistant
+
 input_button:
   estia_przywroc_sterowanie_automatyczne:
     name: "Estia: Przywróć sterowanie automatyczne"
     icon: mdi:autorenew
+
+  estia_zapisz_baze_podlicznika:
+    name: "Estia: Zapisz obecny odczyt jako bazę początkową"
+    icon: mdi:content-save-cog
 
 template:
   # --- Rejestrator ostatnich akcji (Historia 5 zdarzeń) ---
@@ -197,7 +240,7 @@ template:
           {% else %}
             {% set old_val = trigger.from_state.state if trigger.from_state is not none else '?' %}
             {% set new_val = trigger.to_state.state if trigger.to_state is not none else '?' %}
-            {% set t_wyliczona = states('sensor.estia_zadana_wyliczona') | float(30.0) | round(0) %}
+            {% set t_wyliczona = states('sensor.estia_zadana_wyliczona') | float(31.5) | round(1) %}
             {% if (new_val | float(-999)) == t_wyliczona %}
               {{ 'Autoadaptacja: ' ~ old_val ~ '°C -> ' ~ new_val ~ '°C' }}
             {% else %}
@@ -242,7 +285,7 @@ template:
               {% set jest_auto = (as_timestamp(now()) - auto_ts) < 20 %}
               {% set old_val = trigger.from_state.state if trigger.from_state is not none else '?' %}
               {% set new_val = trigger.to_state.state if trigger.to_state is not none else '?' %}
-              {% set t_wyliczona = states('sensor.estia_zadana_wyliczona') | float(30.0) | round(0) %}
+              {% set t_wyliczona = states('sensor.estia_zadana_wyliczona') | float(31.5) | round(1) %}
               {% set jest_zgodna = (new_val | float(-999)) == t_wyliczona %}
               {% if old_val != new_val and old_val not in ['unavailable', 'unknown'] and new_val not in ['unavailable', 'unknown'] %}
                 {% if jest_auto or jest_zgodna %}
@@ -374,7 +417,7 @@ template:
           {% set t_min = -15.0 %}
           {% set t_max = 17.0 %}
           {% set sp_mroz = 42.0 %}
-          {% set sp_cieplo = 27.0 %}
+          {% set sp_cieplo = 28.5 %}
           {% if t_zewn <= t_min %}
             {{ sp_mroz }}
           {% elif t_zewn >= t_max %}
@@ -422,7 +465,7 @@ template:
             
             {% set cel = baza + offset + kompensacja + boost_pv + boost_g12 %}
             {# Bezpieczny zakres dla instalacji grzejnikowej: min 25°C, max 50°C #}
-            {{ [25.0, [cel, 50.0] | min] | max | round(1) }}
+            {{ [28.0, [((cel * 2) | round(0) / 2), 50.0] | min] | max | round(1) }}
           {% endif %}
         attributes:
           baza_pogodowa: "{{ states('sensor.estia_krzywa_pogodowa_baza') }}"
@@ -560,6 +603,93 @@ template:
             {% set cheap = is_state('binary_sensor.licznik_00069839_tania_strefa', 'on') %}
             {% set cena = p_tania if cheap else p_droga %}
             {{ (kwh * cena) | round(2) }}
+          {% endif %}
+
+      # ----------------------------------------------------------------------
+      # AUDYT I WALIDACJA ZUŻYCIA ENERGII (FIZYCZNY PODLICZNIK VS HOME ASSISTANT)
+      # ----------------------------------------------------------------------
+      - name: "Estia: Podlicznik - zużycie rzeczywiste od bazy"
+        unique_id: estia_podlicznik_zuzycie_rzeczywiste
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total
+        icon: mdi:meter-electric
+        state: >
+          {% set stan = states('input_number.estia_licznik_fizyczny_stan') | float(0) %}
+          {% set baza = states('input_number.estia_licznik_fizyczny_baza') | float(0) %}
+          {% if baza > 0 and stan >= baza %}
+            {{ (stan - baza) | round(2) }}
+          {% else %}
+            0.0
+          {% endif %}
+
+      - name: "Estia: HA - zużycie energii pompy od bazy"
+        unique_id: estia_ha_zuzycie_od_bazy
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total
+        icon: mdi:chart-bell-curve
+        state: >
+          {% set ha_teraz = states('sensor.pompa_ciepla_toshiba_estia_energy') | float(0) %}
+          {% set ha_baza = states('input_number.estia_licznik_ha_baza') | float(0) %}
+          {% if ha_baza > 0 and ha_teraz >= ha_baza %}
+            {{ (ha_teraz - ha_baza) | round(2) }}
+          {% else %}
+            0.0
+          {% endif %}
+
+      - name: "Estia: Podlicznik - szacowany obecny stan z HA"
+        unique_id: estia_podlicznik_szacowany_stan
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        icon: mdi:counter
+        state: >
+          {% set fiz_baza = states('input_number.estia_licznik_fizyczny_baza') | float(0) %}
+          {% set ha_zuzycie = states('sensor.estia_ha_zuzycie_energii_pompy_od_bazy') | float(0) %}
+          {% if fiz_baza > 0 %}
+            {{ (fiz_baza + ha_zuzycie) | round(2) }}
+          {% else %}
+            {{ states('input_number.estia_licznik_fizyczny_stan') | float(0) | round(2) }}
+          {% endif %}
+
+      - name: "Estia: Podlicznik - różnica zużycia HA vs fizyczny"
+        unique_id: estia_podlicznik_roznica_kwh
+        unit_of_measurement: "kWh"
+        icon: mdi:delta
+        state: >
+          {% set fiz_zuzycie = states('sensor.estia_podlicznik_zuzycie_rzeczywiste_od_bazy') | float(0) %}
+          {% set ha_zuzycie = states('sensor.estia_ha_zuzycie_energii_pompy_od_bazy') | float(0) %}
+          {% set baza = states('input_number.estia_licznik_fizyczny_baza') | float(0) %}
+          {% if baza > 0 and fiz_zuzycie > 0 %}
+            {{ (ha_zuzycie - fiz_zuzycie) | round(2) }}
+          {% else %}
+            0.0
+          {% endif %}
+
+      - name: "Estia: Podlicznik - błąd względny estymacji HA"
+        unique_id: estia_podlicznik_blad_procent
+        unit_of_measurement: "%"
+        icon: mdi:percent
+        state: >
+          {% set fiz_zuzycie = states('sensor.estia_podlicznik_zuzycie_rzeczywiste_od_bazy') | float(0) %}
+          {% set ha_zuzycie = states('sensor.estia_ha_zuzycie_energii_pompy_od_bazy') | float(0) %}
+          {% if fiz_zuzycie > 0.5 %}
+            {{ (((ha_zuzycie - fiz_zuzycie) / fiz_zuzycie) * 100.0) | round(1) }}
+          {% else %}
+            0.0
+          {% endif %}
+
+      - name: "Estia: Podlicznik - współczynnik korygujący (Fiz/HA)"
+        unique_id: estia_podlicznik_wspolczynnik_korekcyjny
+        icon: mdi:multiplication
+        state: >
+          {% set fiz_zuzycie = states('sensor.estia_podlicznik_zuzycie_rzeczywiste_od_bazy') | float(0) %}
+          {% set ha_zuzycie = states('sensor.estia_ha_zuzycie_energii_pompy_od_bazy') | float(0) %}
+          {% if ha_zuzycie > 0.5 and fiz_zuzycie > 0.5 %}
+            {{ (fiz_zuzycie / ha_zuzycie) | round(3) }}
+          {% else %}
+            1.000
           {% endif %}
 
 sensor:
@@ -829,18 +959,18 @@ automation:
                 target:
                   entity_id: climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1
                 data:
-                  temperature: "{{ states('sensor.estia_zadana_wyliczona') | float(30.0) | round(0) }}"
+                  temperature: "{{ states('sensor.estia_zadana_wyliczona') | float(31.5) | round(1) }}"
               - action: logbook.log
                 data:
                   name: "Estia Termostat Pokojowy"
                   message: >
                     Wznowiono ogrzewanie C.O. (żądanie dogrzania). Temp średnia: 
                     {{ states('sensor.dom_srednia_temperatura_wewnetrzna') }}°C <= ({{ states('input_number.estia_oczekiwana_temperatura_w_domu') }}°C - {{ states('input_number.estia_histereza_zalaczenia_pokojowa') }}K).
-                    Zadana wody: {{ states('sensor.estia_zadana_wyliczona') | round(0) }}°C.
+                    Zadana wody: {{ states('sensor.estia_zadana_wyliczona') | round(1) }}°C.
               - event: estia_akcja_sterowania
                 event_data:
                   akcja: "Termostat: wznowienie C.O. (dogrzanie)"
-                  szczegoly: "Średnia {{ states('sensor.dom_srednia_temperatura_wewnetrzna') }}°C, woda: {{ states('sensor.estia_zadana_wyliczona') | round(0) }}°C"
+                  szczegoly: "Średnia {{ states('sensor.dom_srednia_temperatura_wewnetrzna') }}°C, woda: {{ states('sensor.estia_zadana_wyliczona') | round(1) }}°C"
                   zrodlo: "Termostat pokojowy (Room Cut-off)"
 
   # ----------------------------------------------------------------------------
@@ -899,11 +1029,11 @@ automation:
         state: "on"
     action:
       - variables:
-          zadana_cel: "{{ states('sensor.estia_zadana_wyliczona') | float(31.0) | round(0) }}"
+          zadana_cel: "{{ states('sensor.estia_zadana_wyliczona') | float(31.5) | round(1) }}"
           obecna: "{{ state_attr('climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1', 'temperature') | float(31.0) }}"
       - if:
           - condition: template
-            value_template: "{{ (zadana_cel - obecna) | abs >= 1.0 }}"
+            value_template: "{{ (zadana_cel - obecna) | abs >= 0.5 }}"
         then:
           - action: input_datetime.set_datetime
             target:
@@ -1006,7 +1136,7 @@ automation:
           {% set jest_auto = (as_timestamp(now()) - auto_ts) < 20 %}
           {% set old_v = trigger.from_state.state if trigger.from_state is not none else '?' %}
           {% set new_v = trigger.to_state.state if trigger.to_state is not none else '?' %}
-          {% set t_wyliczona = states('sensor.estia_zadana_wyliczona') | float(30.0) | round(0) %}
+          {% set t_wyliczona = states('sensor.estia_zadana_wyliczona') | float(31.5) | round(1) %}
           {% set jest_zgodna = (new_v | float(-999)) == t_wyliczona %}
           {{ old_v != new_v and old_v not in ['unavailable','unknown'] and new_v not in ['unavailable','unknown'] and not jest_auto and not jest_zgodna }}
     action:
@@ -1058,17 +1188,92 @@ automation:
         target:
           entity_id: climate.toshiba_estia_r410a_estia_ogrzewanie_strefy_1
         data:
-          temperature: "{{ states('sensor.estia_zadana_wyliczona') | float(30.0) | round(0) }}"
+          temperature: "{{ states('sensor.estia_zadana_wyliczona') | float(31.5) | round(1) }}"
       - action: logbook.log
         data:
           name: "Estia Optymalizator"
           message: >
-            Wciśnięto przycisk: Przywrócono sterowanie automatyczne. Zaaplikowano zadaną z krzywej: {{ states('sensor.estia_zadana_wyliczona') | round(0) }}°C.
+            Wciśnięto przycisk: Przywrócono sterowanie automatyczne. Zaaplikowano zadaną z krzywej: {{ states('sensor.estia_zadana_wyliczona') | round(1) }}°C.
       - event: estia_akcja_sterowania
         event_data:
           akcja: "Przywrócono sterowanie automatyczne"
-          szczegoly: "Zadana z krzywej: {{ states('sensor.estia_zadana_wyliczona') | round(0) }}°C"
+          szczegoly: "Zadana z krzywej: {{ states('sensor.estia_zadana_wyliczona') | round(1) }}°C"
           zrodlo: "Przycisk (Pushbutton HA)"
+
+  # ----------------------------------------------------------------------------
+  # 8. Podlicznik prądu pompy ciepła — zapis bazy początkowej
+  # ----------------------------------------------------------------------------
+  - id: estia_zapisz_baze_podlicznika_pradu
+    alias: "Estia: Zapis bazy podlicznika prądu"
+    description: >
+      Zapisuje aktualny fizyczny odczyt podlicznika (z input_number.estia_licznik_fizyczny_stan)
+      oraz aktualny stan encji energii w Home Assistant (sensor.pompa_ciepla_toshiba_estia_energy)
+      jako punkt odniesienia do długoterminowego audytu porównawczego.
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: input_button.estia_zapisz_baze_podlicznika
+      - platform: state
+        entity_id: input_number.estia_licznik_fizyczny_stan
+    condition:
+      - condition: or
+        conditions:
+          - condition: template
+            value_template: "{{ trigger.entity_id == 'input_button.estia_zapisz_baze_podlicznika' }}"
+          - condition: numeric_state
+            entity_id: input_number.estia_licznik_fizyczny_baza
+            below: 0.05
+    action:
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.estia_licznik_fizyczny_baza
+        data:
+          value: "{{ states('input_number.estia_licznik_fizyczny_stan') | float(0) }}"
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.estia_licznik_ha_baza
+        data:
+          value: "{{ states('sensor.pompa_ciepla_toshiba_estia_energy') | float(0) }}"
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.estia_licznik_fizyczny_data_bazy
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.estia_licznik_fizyczny_data_ostatniego_odczytu
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      - action: logbook.log
+        data:
+          name: "Estia Podlicznik"
+          message: >
+            Zapisano bazę podlicznika: Fizyczny = {{ states('input_number.estia_licznik_fizyczny_stan') }} kWh,
+            HA = {{ states('sensor.pompa_ciepla_toshiba_estia_energy') }} kWh.
+
+  # ----------------------------------------------------------------------------
+  # 9. Podlicznik prądu pompy ciepła — aktualizacja daty odczytu
+  # ----------------------------------------------------------------------------
+  - id: estia_aktualizacja_daty_odczytu_podlicznika
+    alias: "Estia: Aktualizacja daty odczytu podlicznika"
+    description: >
+      Aktualizuje znacznik czasu przy każdej ręcznej zmianie stanu fizycznego podlicznika.
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: input_number.estia_licznik_fizyczny_stan
+    condition:
+      - condition: template
+        value_template: "{{ trigger.from_state is not none and trigger.to_state is not none and trigger.from_state.state != trigger.to_state.state }}"
+      - condition: numeric_state
+        entity_id: input_number.estia_licznik_fizyczny_baza
+        above: 0.05
+    action:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.estia_licznik_fizyczny_data_ostatniego_odczytu
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
 
 utility_meter:
   estia_energia_dzis_taryfy:
