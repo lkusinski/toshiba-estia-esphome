@@ -395,11 +395,7 @@ template:
             {% set t_cel = states('input_number.estia_oczekiwana_temperatura_w_domu') | float(21.0) %}
             {% set prog = states('input_number.estia_tryb_cichy_prog_deficytu_temp') | float(1.0) %}
             {% set deficyt = t_cel - t_dom %}
-            {% set cur_hour = now().hour %}
-            {% set is_night = cur_hour >= 22 or cur_hour < 6 %}
-            {% if is_defrost or t_zewn < -5.0 %}
-              false
-            {% elif deficyt >= prog and not is_night %}
+            {% if is_defrost or t_zewn < -5.0 or deficyt >= prog %}
               false
             {% else %}
               true
@@ -563,16 +559,12 @@ template:
             {% set t_cel = states('input_number.estia_oczekiwana_temperatura_w_domu') | float(21.0) %}
             {% set prog = states('input_number.estia_tryb_cichy_prog_deficytu_temp') | float(1.0) %}
             {% set deficyt = (t_cel - t_dom) | round(2) %}
-            {% set cur_hour = now().hour %}
-            {% set is_night = cur_hour >= 22 or cur_hour < 6 %}
             {% if is_defrost %}
               Defrost w toku (Wymagana pełna moc)
             {% elif t_zewn < -5.0 %}
               Głęboki mróz poniżej -5°C (Pełna moc)
-            {% elif deficyt >= prog and not is_night %}
+            {% elif deficyt >= prog %}
               Duży deficyt w domu {{ deficyt }}K (Szybkie nagrzewanie)
-            {% elif is_night %}
-              Cisza nocna 22:00-06:00 (Tryb cichy)
             {% else %}
               Optymalizacja COP / Antytaktowanie (Tryb cichy)
             {% endif %}
