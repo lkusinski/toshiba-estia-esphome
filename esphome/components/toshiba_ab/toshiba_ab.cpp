@@ -4288,6 +4288,10 @@ void ToshibaAbClimate::process_received_data_estia_first_gen_(const DataFrame *f
       this->hotwater_pump_heating_binary_sensor_->publish_state(this->estia_first_gen_hotwater_pump_heating_);
     if (this->hotwater_resistor_heating_binary_sensor_)
       this->hotwater_resistor_heating_binary_sensor_->publish_state(this->estia_first_gen_hotwater_resistor_heating_);
+    ESP_LOGI(TAG, "DEBUG Master status frame: raw[6]=0x%02X raw[7]=0x%02X raw[8]=0x%02X", frame->raw[6], frame->raw[7], frame->raw[8]);
+    this->estia_first_gen_silent_mode_ = (frame->raw[7] & 0x20) != 0;
+    if (this->silent_mode_hardware_binary_sensor_)
+      this->silent_mode_hardware_binary_sensor_->publish_state(this->estia_first_gen_silent_mode_);
     if (this->zone1_target_temperature_sensor_) this->zone1_target_temperature_sensor_->publish_state(static_cast<float>(frame->raw[10]) / 2.0f - 16.0f);
     const bool has_status_temperatures = frame->raw[0] == 0x15 && len > 18;
     // LOKALNA POPRAWKA (HWS-P805XWHT6-E / Estia 5 Hipower): DHW nieaktywne (pompa C.O.),

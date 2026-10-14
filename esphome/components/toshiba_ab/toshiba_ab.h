@@ -926,6 +926,7 @@ class ToshibaAbClimate : public Component, public uart::UARTDevice, public clima
   void set_zone1_climate(ToshibaAbEstiaZone1Climate *zone1_climate) { zone1_climate_ = zone1_climate; }
   void set_hotwater_pump_heating_binary_sensor(binary_sensor::BinarySensor *sensor) { hotwater_pump_heating_binary_sensor_ = sensor; }
   void set_hotwater_resistor_heating_binary_sensor(binary_sensor::BinarySensor *sensor) { hotwater_resistor_heating_binary_sensor_ = sensor; }
+  void set_silent_mode_hardware_binary_sensor(binary_sensor::BinarySensor *sensor) { silent_mode_hardware_binary_sensor_ = sensor; }
   void set_frame_format(FrameFormat format) {
     data_reader.set_frame_format(format);
     frame_format_auto_ = false;
@@ -1181,6 +1182,8 @@ class ToshibaAbClimate : public Component, public uart::UARTDevice, public clima
   ToshibaAbEstiaZone1Climate *zone1_climate_{nullptr};
   binary_sensor::BinarySensor *hotwater_pump_heating_binary_sensor_{nullptr};
   binary_sensor::BinarySensor *hotwater_resistor_heating_binary_sensor_{nullptr};
+  bool estia_first_gen_silent_mode_{false};
+  binary_sensor::BinarySensor *silent_mode_hardware_binary_sensor_{nullptr};
   binary_sensor::BinarySensor *remote_error_binary_sensor_{nullptr};
   bool remote_error_active_{false};
   uint8_t remote_error_autoreset_attempts_{0};

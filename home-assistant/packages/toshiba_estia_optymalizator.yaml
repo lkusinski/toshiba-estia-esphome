@@ -70,6 +70,15 @@ input_datetime:
     icon: mdi:clock-check
 
 input_select:
+  estia_zarzadzanie_trybem_cichym:
+    name: "Estia: Zarządzanie trybem cichym agregatu"
+    options:
+      - "Inteligentny (Auto / Optymalizator)"
+      - "Wymuszony Cichy (Kaganiec 30 Hz)"
+      - "Wyłączony (Pełna moc agregatu)"
+    initial: "Inteligentny (Auto / Optymalizator)"
+    icon: mdi:volume-mute
+
   estia_tryb_sterowania:
     name: "Estia: wyznaczanie temperatury w Strefie 1"
     options:
@@ -79,6 +88,15 @@ input_select:
     icon: mdi:tune
 
 input_number:
+  estia_tryb_cichy_prog_deficytu_temp:
+    name: "Estia: Próg deficytu dla zdjęcia trybu cichego (Moc)"
+    min: 0.3
+    max: 2.5
+    step: 0.1
+    initial: 1.0
+    unit_of_measurement: "K"
+    icon: mdi:thermometer-alert
+
   estia_oczekiwana_temperatura_w_domu:
     name: "Dom: Oczekiwana temperatura (Wzorzec)"
     min: 18.0
@@ -360,6 +378,34 @@ template:
             {% endif %}
           {% endif %}
 
+      # --- Rekomendacja trybu cichego agregatu (Optymalizator) ---
+      - name: "Estia: zalecany tryb cichy"
+        unique_id: estia_zalecany_tryb_cichy
+        icon: mdi:volume-mute
+        state: >
+          {% set tryb = states('input_select.estia_zarzadzanie_trybem_cichym') %}
+          {% if tryb == 'Wymuszony Cichy (Kaganiec 30 Hz)' %}
+            true
+          {% elif tryb == 'Wyłączony (Pełna moc agregatu)' %}
+            false
+          {% else %}
+            {% set is_defrost = is_state('binary_sensor.toshiba_estia_r410a_estia_odszranianie_defrost', 'on') %}
+            {% set t_zewn = states('sensor.toshiba_estia_r410a_estia_temp_zewnetrzna') | float(10.0) %}
+            {% set t_dom = states('sensor.dom_srednia_temperatura_wewnetrzna') | float(21.0) %}
+            {% set t_cel = states('input_number.estia_oczekiwana_temperatura_w_domu') | float(21.0) %}
+            {% set prog = states('input_number.estia_tryb_cichy_prog_deficytu_temp') | float(1.0) %}
+            {% set deficyt = t_cel - t_dom %}
+            {% set cur_hour = now().hour %}
+            {% set is_night = cur_hour >= 22 or cur_hour < 6 %}
+            {% if is_defrost or t_zewn < -5.0 %}
+              false
+            {% elif deficyt >= prog and not is_night %}
+              false
+            {% else %}
+              true
+            {% endif %}
+          {% endif %}
+
   - sensor:
       # --- Temperatury wewnątrz domu (Midea z korektą) ---
       - name: "Dom: Salon temperatura (skorygowana)"
@@ -499,6 +545,43 @@ template:
           {% else %}
             Grzanie intensywne (Wysoka moc)
           {% endif %}
+
+      # --- Status i uzasadnienie decyzji trybu cichego ---
+      - name: "Estia: status decyzji trybu cichego"
+        unique_id: estia_tryb_cichy_status_decyzji
+        icon: mdi:information-outline
+        state: >
+          {% set tryb = states('input_select.estia_zarzadzanie_trybem_cichym') %}
+          {% if tryb == 'Wymuszony Cichy (Kaganiec 30 Hz)' %}
+            Ręcznie wymuszony cichy (Kaganiec 30 Hz)
+          {% elif tryb == 'Wyłączony (Pełna moc agregatu)' %}
+            Ręcznie wyłączony (Pełna moc agregatu)
+          {% else %}
+            {% set is_defrost = is_state('binary_sensor.toshiba_estia_r410a_estia_odszranianie_defrost', 'on') %}
+            {% set t_zewn = states('sensor.toshiba_estia_r410a_estia_temp_zewnetrzna') | float(10.0) %}
+            {% set t_dom = states('sensor.dom_srednia_temperatura_wewnetrzna') | float(21.0) %}
+            {% set t_cel = states('input_number.estia_oczekiwana_temperatura_w_domu') | float(21.0) %}
+            {% set prog = states('input_number.estia_tryb_cichy_prog_deficytu_temp') | float(1.0) %}
+            {% set deficyt = (t_cel - t_dom) | round(2) %}
+            {% set cur_hour = now().hour %}
+            {% set is_night = cur_hour >= 22 or cur_hour < 6 %}
+            {% if is_defrost %}
+              Defrost w toku (Wymagana pełna moc)
+            {% elif t_zewn < -5.0 %}
+              Głęboki mróz poniżej -5°C (Pełna moc)
+            {% elif deficyt >= prog and not is_night %}
+              Duży deficyt w domu {{ deficyt }}K (Szybkie nagrzewanie)
+            {% elif is_night %}
+              Cisza nocna 22:00-06:00 (Tryb cichy)
+            {% else %}
+              Optymalizacja COP / Antytaktowanie (Tryb cichy)
+            {% endif %}
+          {% endif %}
+        attributes:
+          tryb_zarzadzania: "{{ states('input_select.estia_zarzadzanie_trybem_cichym') }}"
+          zalecany_stan: "{{ states('binary_sensor.estia_zalecany_tryb_cichy') }}"
+          stan_biezacy_pompy: "{{ states('switch.toshiba_estia_r410a_estia_tryb_cichy_agregatu') }}"
+          uchyb_temperatury: "{{ (states('input_number.estia_oczekiwana_temperatura_w_domu')|float(21.0) - states('sensor.dom_srednia_temperatura_wewnetrzna')|float(21.0)) | round(2) }} K"
 
       - name: "Estia: modulacja sprężarki"
         unique_id: estia_modulacja_sprezarki_procent
@@ -1274,6 +1357,63 @@ automation:
           entity_id: input_datetime.estia_licznik_fizyczny_data_ostatniego_odczytu
         data:
           datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+  # ----------------------------------------------------------------------------
+  # 10. Nadzorca i automatyczna korekta trybu cichego agregatu
+  # ----------------------------------------------------------------------------
+  - id: estia_nadzorca_i_korekta_trybu_cichego
+    alias: "Estia: Nadzorca i automatyczna korekta trybu cichego"
+    description: >
+      Nadzoruje stan trybu cichego agregatu, weryfikuje zgodność z zaleceniem
+      optymalizatora i koryguje nastawę w razie rozbieżności.
+    mode: restart
+    trigger:
+      - trigger: state
+        entity_id: binary_sensor.estia_zalecany_tryb_cichy
+        for: "00:00:15"
+      - trigger: state
+        entity_id: switch.toshiba_estia_r410a_estia_tryb_cichy_agregatu
+        for: "00:00:20"
+      - trigger: time_pattern
+        minutes: "/5"
+      - trigger: homeassistant
+        event: start
+    condition:
+      - condition: state
+        entity_id: binary_sensor.toshiba_estia_r410a_estia_magistrala_ok
+        state: "on"
+      - condition: state
+        entity_id: switch.toshiba_estia_r410a_estia_tryb_tylko_odczyt
+        state: "off"
+      - condition: template
+        value_template: >
+          {{ states('switch.toshiba_estia_r410a_estia_tryb_cichy_agregatu') != states('binary_sensor.estia_zalecany_tryb_cichy') }}
+    action:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.estia_zalecany_tryb_cichy
+                state: "on"
+            sequence:
+              - action: switch.turn_on
+                target:
+                  entity_id: switch.toshiba_estia_r410a_estia_tryb_cichy_agregatu
+              - action: logbook.log
+                data:
+                  name: "Estia Nadzorca"
+                  message: "Załączono tryb cichy agregatu (Powód: {{ states('sensor.estia_tryb_cichy_status_decyzji') }})"
+          - conditions:
+              - condition: state
+                entity_id: binary_sensor.estia_zalecany_tryb_cichy
+                state: "off"
+            sequence:
+              - action: switch.turn_off
+                target:
+                  entity_id: switch.toshiba_estia_r410a_estia_tryb_cichy_agregatu
+              - action: logbook.log
+                data:
+                  name: "Estia Nadzorca"
+                  message: "Wyłączono tryb cichy agregatu (Powód: {{ states('sensor.estia_tryb_cichy_status_decyzji') }})"
 
 utility_meter:
   estia_energia_dzis_taryfy:

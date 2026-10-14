@@ -232,6 +232,12 @@ climate:
       name: "Estia: temperatura pilota (garaż)"
       id: estia_temp_pilota_garaz
 
+    # --- Sprzętowy odczyt stanu trybu cichego bezpośrednio z magistrali AB (bajt 7 bit 5) ---
+    silent_mode_hardware:
+      name: "Estia: tryb cichy sprzętowy (status magistrali)"
+      id: estia_silent_mode_hw
+      icon: mdi:volume-mute
+
     ############################################################################
     # TELEMETRIA ZAPYTYWANA PO MAGISTRALI AB (first-gen)
     ############################################################################
@@ -935,6 +941,7 @@ switch:
     name: "Estia: tryb cichy agregatu"
     id: estia_silent_mode
     optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
     icon: mdi:volume-mute
     turn_on_action:
       - if:

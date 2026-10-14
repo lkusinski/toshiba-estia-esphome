@@ -87,6 +87,7 @@ CONF_DHW_BOOST = "dhw_boost"
 CONF_ANTIBACTERIA = "antibacteria"
 CONF_ZONE1_WATER_TEMPERATURE = "zone1_water_temperature"
 CONF_ZONE1_TARGET_TEMPERATURE = "zone1_target_temperature"
+CONF_REMOTE_TEMPERATURE = "remote_temperature"
 CONF_DHW_CURRENT_TEMPERATURE = "dhw_current_temperature"
 CONF_COMPRESSOR_DISCHARGE_TEMPERATURE = "compressor_discharge_temperature"
 CONF_CONDENSER_TEMPERATURE = "condenser_temperature"
@@ -97,6 +98,7 @@ CONF_ZONE2_WATER_TEMPERATURE = "zone2_water_temperature"
 CONF_ZONE1_CLIMATE = "zone1_climate"
 CONF_HOTWATER_PUMP_HEATING = "hotwater_pump_heating"
 CONF_HOTWATER_RESISTOR_HEATING = "hotwater_resistor_heating"
+CONF_SILENT_MODE_HARDWARE = "silent_mode_hardware"
 CONF_REMOTE_ERROR = "remote_error"
 
 #AC Sensors addresses
@@ -336,6 +338,12 @@ CONFIG_SCHEMA = cv.All(
             device_class=DEVICE_CLASS_TEMPERATURE,
             state_class=STATE_CLASS_MEASUREMENT,
         ),
+        cv.Optional(CONF_REMOTE_TEMPERATURE): sensor.sensor_schema(
+            unit_of_measurement=UNIT_CELSIUS,
+            accuracy_decimals=1,
+            device_class=DEVICE_CLASS_TEMPERATURE,
+            state_class=STATE_CLASS_MEASUREMENT,
+        ),
         cv.Optional(CONF_DHW_CURRENT_TEMPERATURE): sensor.sensor_schema(
             unit_of_measurement=UNIT_CELSIUS,
             accuracy_decimals=1,
@@ -383,6 +391,7 @@ CONFIG_SCHEMA = cv.All(
         ),
         cv.Optional(CONF_HOTWATER_PUMP_HEATING): binary_sensor.binary_sensor_schema(),
         cv.Optional(CONF_HOTWATER_RESISTOR_HEATING): binary_sensor.binary_sensor_schema(),
+        cv.Optional(CONF_SILENT_MODE_HARDWARE): binary_sensor.binary_sensor_schema(),
         cv.Optional(CONF_REMOTE_ERROR): binary_sensor.binary_sensor_schema(
             device_class=DEVICE_CLASS_PROBLEM,
             entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
@@ -700,6 +709,9 @@ async def to_code(config):
     if CONF_ZONE1_TARGET_TEMPERATURE in config:
         sens = await sensor.new_sensor(config[CONF_ZONE1_TARGET_TEMPERATURE])
         cg.add(var.set_zone1_target_temperature_sensor(sens))
+    if CONF_REMOTE_TEMPERATURE in config:
+        sens = await sensor.new_sensor(config[CONF_REMOTE_TEMPERATURE])
+        cg.add(var.set_remote_room_temp_sensor(sens))
 
     if CONF_DHW_CURRENT_TEMPERATURE in config:
         dhw_current_sens = await sensor.new_sensor(config[CONF_DHW_CURRENT_TEMPERATURE])
@@ -721,6 +733,9 @@ async def to_code(config):
     if CONF_HOTWATER_RESISTOR_HEATING in config:
         sens = await binary_sensor.new_binary_sensor(config[CONF_HOTWATER_RESISTOR_HEATING])
         cg.add(var.set_hotwater_resistor_heating_binary_sensor(sens))
+    if CONF_SILENT_MODE_HARDWARE in config:
+        sens = await binary_sensor.new_binary_sensor(config[CONF_SILENT_MODE_HARDWARE])
+        cg.add(var.set_silent_mode_hardware_binary_sensor(sens))
     if CONF_REMOTE_ERROR in config:
         sens = await binary_sensor.new_binary_sensor(config[CONF_REMOTE_ERROR])
         cg.add(var.set_remote_error_binary_sensor(sens))
